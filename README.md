@@ -1,0 +1,88 @@
+# Shadow Protocol
+
+A top-down tactical stealth-action game for Android, inspired by the gameplay
+philosophy of Splinter Cell. Built entirely from the Linux command line with
+Godot 4.7 and GDScript - no Godot editor required for development or builds.
+
+You are a covert operative. Infiltrate guarded facilities, use light and
+shadow, avoid patrols, complete objectives and extract undetected.
+
+## Status
+
+Phase 1 (functional project foundation) - complete:
+
+- Grid-generated collision test level (16 x 28) with walls, illuminated
+  floor zones, terminal, extraction point, player and enemy spawn data
+- CharacterBody2D player controller: analog/keyboard movement,
+  acceleration and friction, crouch, sprint, noise and visibility
+  interfaces
+- Deterministic grid-based illumination model (StealthSystem autoload)
+- Multi-touch controls: floating virtual joystick (left half of the
+  screen) plus CROUCH / SPRINT / INTERACT buttons (right side), with
+  pointer-index tracking so simultaneous input never interferes
+- Keyboard fallback (WASD, C, Shift, E) for desktop and headless testing
+- Debug HUD: speed, posture, visibility, noise radius
+- Android export preset (arm64) and CLI build pipeline
+
+Planned phases (following the master development plan): stealth and
+visibility depth, enemy AI (patrol/suspicion/investigate/search states),
+procedural level variety, mission gameplay, mobile polish, Android
+optimization, APK packaging and device testing.
+
+## Project layout
+
+    project.godot          engine config, input map, mobile renderer
+    export_presets.cfg     Android export preset (debug signing default)
+    scenes/main.tscn       game root: level, player, UI
+    scenes/player.tscn     player scene
+    scripts/main.gd        level lifecycle, wiring, HUD
+    scripts/player.gd      movement, crouch/sprint, stealth interfaces
+    scripts/mobile_controls.gd  multi-touch joystick + action buttons
+    scripts/level_generator.gd  grid -> walls, floors, markers, metadata
+    scripts/stealth_system.gd   autoload: visibility + noise model
+    tools/                 CLI pipeline (validate, setup, build, install)
+    build/                 export output (git-ignored)
+
+## CLI workflow
+
+All commands are run from the repository root.
+
+1. Validate the project headless (no editor, no display). This imports
+   resources, boots the main scene, simulates frames and runs the
+   movement/stealth smoke test:
+
+       GODOT_BIN=/path/to/godot tools/validate_project.sh
+
+2. Prepare the Android toolchain (verifies Java 17+, Godot 4.7.2,
+   export templates, Android SDK cmdline-tools, debug keystore):
+
+       tools/setup_android.sh
+
+3. Build the APK (debug signing by default; release signing only through
+   SHADOW_PROTOCOL_KEYSTORE / SHADOW_PROTOCOL_KEYSTORE_USER /
+   SHADOW_PROTOCOL_KEYSTORE_PASSWORD environment variables - secrets are
+   never committed):
+
+       tools/build_android.sh
+
+4. Install and launch on a connected device:
+
+       tools/install_android.sh
+
+## Desktop test run
+
+    godot --path . 
+
+Controls: WASD move, C crouch, Shift sprint, E interact.
+
+## Engineering notes
+
+- All scenes are text .tscn files and can be reviewed in any diff tool.
+- Walls are merged into horizontal runs (one StaticBody2D per run) to
+  keep the node count low.
+- The illumination model is a deterministic gameplay model based on lit
+  grid cells, crouch posture and motion - deliberately not a physically
+  based light simulation. Phase 2 extends it with dynamic light sources.
+- Enemy AI, procedural level variety and mission logic are intentionally
+  out of scope until Phases 3-5; the interfaces (noise_emitted,
+  visibility, enemy spawn points, terminals) are already in place.

@@ -1,0 +1,15 @@
+# Godot 4 generated files
+.godot/
+*.translation
+
+# Builds and signing material
+build/
+*.apk
+*.aab
+*.keystore
+*.jks
+keystore.properties
+export_presets.local.cfg
+
+# OS
+.DS_Store
