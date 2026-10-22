@@ -119,6 +119,16 @@ func set_visibility(value: float) -> void:
 	visibility_updated.emit(visibility)
 
 
+## Movement-state classification for the noise event contract.
+func current_movement_state() -> StringName:
+	if velocity.length() < 10.0:
+		return &"still"
+	if crouching:
+		return &"crouch"
+	if sprinting:
+		return &"sprint"
+	return &"walk"
+
 func request_interact() -> void:
 	interact_requested.emit()
 

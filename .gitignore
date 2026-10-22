@@ -11,5 +11,8 @@ build/
 keystore.properties
 export_presets.local.cfg
 
+# Internal development roadmap (delivered externally, kept out of the repo)
+roadmap.md
+
 # OS
 .DS_Store

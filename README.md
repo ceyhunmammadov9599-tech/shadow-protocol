@@ -9,6 +9,20 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
+Phase 2 (stealth and visibility) - complete at headless-verification level:
+
+- Dynamic LightSource component (extends PointLight2D): one parameter set
+  (position, radius, intensity, enabled) drives both rendered light and
+  the gameplay illumination model; static and moving (ping-pong) sources
+- Advanced visibility model: illumination = max(static grid layer,
+  dynamic light layer with quadratic falloff), crouch factor, single
+  motion boost, clamped 0..1
+- Noise propagation foundation: NoiseEvent contract + central
+  StealthSystem.publish_noise() dispatch with same-frame dedup - Phase 3
+  enemy AI subscribes without touching the player controller
+- Gameplay visibility meter (top-center, procedurally drawn, smoothed,
+  low/medium/high bands) bound to live stealth-system values
+
 Phase 1 (functional project foundation) - complete:
 
 - Grid-generated collision test level (16 x 28) with walls, illuminated
