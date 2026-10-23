@@ -18,6 +18,9 @@ extends Node2D
 @onready var player: CharacterBody2D = $Player
 @onready var level_root: Node2D = $LevelRoot
 @onready var touch_layer: Control = $UI/TouchLayer
+# Visual upgrade: mission end-state overlay and detection warning edges.
+@onready var mission_overlay: MissionOverlay = $UI/MissionOverlay
+@onready var warning_layer: Control = $UI/WarningLayer
 @onready var hud: Label = $UI/HUD
 @onready var status: Label = $UI/Status
 @onready var meter: Control = $UI/VisibilityMeter
@@ -53,6 +56,10 @@ var feedback_manager: FeedbackManager
 const INTERACTION_RADIUS: float = 80.0
 var interaction_radius: float = INTERACTION_RADIUS  # configurable per level/tests
 var _interact_target: Node = null  # nearest eligible terminal/door (throttled)
+# Visual upgrade: extraction beacon reference + the terminal currently
+# carrying the in-range highlight (presentation only).
+var extraction_beacon: ExtractionBeacon = null
+var _highlighted_terminal: Terminal = null
 var _interact_search_timer: float = 0.0
 var _hud_action_hint := ""
 # Corrective iteration (layout remediation): the help line matches the
@@ -68,6 +75,8 @@ func _ready() -> void:
 	touch_layer.interact_pressed.connect(_on_interact)
 	player.interact_requested.connect(_on_interact)
 	player.noise_emitted.connect(_on_player_noise)
+	mission_overlay.restart_requested.connect(restart_mission)
+	warning_layer.set_ratio(0.0)
 	_controls_line = "Touch: left thumb moves - CRCH / SPRNT / ACT buttons" \
 		if touch_layer.visible \
 		else "C crouch  Shift sprint  E use  R restart"
@@ -164,6 +173,12 @@ func load_level(descriptor: Dictionary) -> void:
 	_hud_cache["state"] = -1
 	_hud_cache["zone"] = &""
 	_hud_cache["hint"] = "__invalidate__"
+	# Visual upgrade: end-state overlay and warning edges never survive
+	# into an unrelated level (lifecycle rule from the design spec).
+	mission_overlay.reset()
+	warning_layer.set_ratio(0.0)
+	extraction_beacon = level_root.get_node_or_null("Extraction") as ExtractionBeacon
+	_highlighted_terminal = null
 
 	# Doors: registered so is_cell_blocked() tracks their live state.
 	for door: Node in level_data["doors"]:
@@ -330,7 +345,9 @@ func _process(delta: float) -> void:
 	# Phase 6: detection danger reads the REAL mission timer; ordinary
 	# suspicion (enemy investigating noise) is shown separately and
 	# never as confirmed detection.
-	detection_meter.set_value(mission_manager.detection_ratio())
+	var ratio: float = mission_manager.detection_ratio()
+	detection_meter.set_value(ratio)
+	warning_layer.set_ratio(ratio)
 	var suspected: bool = false
 	for enemy in enemies:
 		if is_instance_valid(enemy) and (enemy is Enemy) \
@@ -467,6 +484,15 @@ func _find_interact_target(update_hint: bool) -> Node:
 			_hud_action_hint = "[E] Open door"
 		else:
 			_hud_action_hint = ""
+	# Visual upgrade: the in-range highlight follows the real nearest
+	# target decision (throttled with it - no per-frame work).
+	var best_terminal := best as Terminal
+	if _highlighted_terminal != best_terminal:
+		if _highlighted_terminal != null and is_instance_valid(_highlighted_terminal):
+			_highlighted_terminal.set_highlight(false)
+		_highlighted_terminal = best_terminal
+		if _highlighted_terminal != null:
+			_highlighted_terminal.set_highlight(true)
 	return best
 
 
@@ -516,6 +542,8 @@ func _on_objective_completed(_terminal_id: StringName) -> void:
 func _on_extraction_availability(available: bool) -> void:
 	if available:
 		_show_status("All objectives complete. Extraction unlocked.")
+	if extraction_beacon != null and is_instance_valid(extraction_beacon):
+		extraction_beacon.set_active(available)
 
 
 func _on_restricted_zone_changed(zone_id: StringName) -> void:
@@ -525,12 +553,17 @@ func _on_restricted_zone_changed(zone_id: StringName) -> void:
 
 func _on_mission_succeeded() -> void:
 	_show_status("MISSION ACCOMPLISHED - press R to restart.")
+	if extraction_beacon != null and is_instance_valid(extraction_beacon):
+		extraction_beacon.set_completed()
+	mission_overlay.show_success(
+		mission_manager.objectives_done(), mission_manager.objectives_total())
 	feedback_manager.play_event(&"success")
 	feedback_manager.request_haptic(250)
 
 
 func _on_mission_failed(reason: String) -> void:
 	_show_status("MISSION FAILED (%s) - press R to restart." % reason)
+	mission_overlay.show_failure(reason)
 	feedback_manager.play_event(&"failure")
 	feedback_manager.request_haptic(300)
 

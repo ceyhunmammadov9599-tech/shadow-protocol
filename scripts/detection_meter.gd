@@ -88,4 +88,6 @@ func _draw() -> void:
 	var caption: String = state_caption()
 	var caption_color: Color = COLOR_SUSPECT if (suspected and display == 0.0) else COLOR_TEXT
 	draw_string(ThemeDB.fallback_font, Vector2(2.0, bar_height + 15.0), caption,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, caption_color)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, caption_color)
+	draw_line(Vector2(0, bar_height + 2.0), Vector2(size.x, bar_height + 2.0),
+		Color(1, 1, 1, 0.06), 1.0)

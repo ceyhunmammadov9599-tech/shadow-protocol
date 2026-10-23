@@ -18,8 +18,16 @@ const COLOR_MAP := Color(0.07, 0.09, 0.12)
 const COLOR_BACKDROP := Color(0.04, 0.05, 0.08)
 const COLOR_FRAME := Color(0.17, 0.20, 0.26)
 const BACKDROP_MARGIN := 640.0
-const COLOR_LIT := Color(0.99, 0.86, 0.55, 0.16)
-const COLOR_WALL := Color(0.17, 0.20, 0.26)
+const COLOR_LIT := Color(0.99, 0.86, 0.55, 0.19)
+const COLOR_SEAM := Color(0.05, 0.065, 0.09, 0.55)
+const COLOR_ZONE_FILL := Color(0.90, 0.62, 0.20, 0.10)
+const COLOR_ZONE_BORDER := Color(0.90, 0.62, 0.20, 0.34)
+const COLOR_ZONE_LABEL := Color(0.95, 0.72, 0.35, 0.75)
+const COLOR_TERMINAL_GLOW := Color(0.98, 0.72, 0.28, 0.10)
+const COLOR_EXTRACTION_GLOW := Color(0.32, 0.85, 0.45, 0.10)
+const COLOR_WALL := Color(0.16, 0.19, 0.25)
+const COLOR_WALL_TOP := Color(0.32, 0.38, 0.47)
+const COLOR_WALL_SHADOW := Color(0.045, 0.055, 0.075)
 const COLOR_WALL_EDGE := Color(0.10, 0.12, 0.16)
 const COLOR_TERMINAL := Color(0.85, 0.66, 0.20)
 const COLOR_EXTRACTION := Color(0.35, 0.85, 0.45)
@@ -36,6 +44,10 @@ var grid_size: Vector2i = Vector2i.ZERO
 ##   door_cells (Dictionary of Vector2i)
 func generate(rows: Array, zones: Array = []) -> Dictionary:
 	for child in get_children():
+		# Detach immediately so the next generation can reuse the node
+		# NAMES (beacon, markers, roots); deletion stays deferred
+		# (queue_free) so physics bodies are freed safely.
+		remove_child(child)
 		child.queue_free()
 
 	var height: int = rows.size()
@@ -85,6 +97,53 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 	floor_poly.color = COLOR_MAP
 	add_child(floor_poly)
 
+	# Floor panel seams: one Line2D, subtle industrial tiling. Purely
+	# visual; the navigation grid and collision are untouched.
+	var seams := Line2D.new()
+	seams.name = "FloorSeams"
+	seams.width = 1.0
+	seams.default_color = COLOR_SEAM
+	var seam_step: float = CELL_SIZE * 2.0
+	for gx in range(1, int(ceil(map_rect.size.x / seam_step))):
+		seams.add_point(Vector2(gx * seam_step, 0))
+		seams.add_point(Vector2(gx * seam_step, map_rect.size.y))
+	for gy in range(1, int(ceil(map_rect.size.y / seam_step))):
+		seams.add_point(Vector2(0, gy * seam_step))
+		seams.add_point(Vector2(map_rect.size.x, gy * seam_step))
+	add_child(seams)
+
+	# Restricted-zone floor overlays: translucent amber fill + border +
+	# label so restricted territory is discoverable at a glance. Visual
+	# only; zone semantics live in LevelCatalog/MissionManager.
+	for zone in zones:
+		var rect: Rect2i = zone["rect"]
+		var zone_pos := Vector2(rect.position) * CELL_SIZE
+		var zone_size := Vector2(rect.size) * CELL_SIZE
+		var fill := Polygon2D.new()
+		fill.name = "Zone_%s" % zone["id"]
+		fill.polygon = PackedVector2Array([
+			zone_pos, zone_pos + Vector2(zone_size.x, 0),
+			zone_pos + zone_size, zone_pos + Vector2(0, zone_size.y)])
+		fill.color = COLOR_ZONE_FILL
+		add_child(fill)
+		var border := Line2D.new()
+		border.name = "ZoneBorder_%s" % zone["id"]
+		border.width = 1.5
+		border.closed = true
+		border.default_color = COLOR_ZONE_BORDER
+		border.points = PackedVector2Array([
+			zone_pos, zone_pos + Vector2(zone_size.x, 0),
+			zone_pos + zone_size, zone_pos + Vector2(0, zone_size.y)])
+		add_child(border)
+		var label := Label.new()
+		label.name = "ZoneLabel_%s" % zone["id"]
+		label.text = String(zone["id"]).to_upper()
+		label.add_theme_font_size_override("font", 12)
+		label.modulate = COLOR_ZONE_LABEL
+		label.position = zone_pos + Vector2(4.0, 4.0)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(label)
+
 	var lit_cells: Dictionary = {}
 	var wall_cells: Dictionary = {}
 	var terminals: Array = []  # Terminal nodes, scan order
@@ -127,6 +186,7 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 					terminal.position = _cell_center(x, y)
 					terminals_root.add_child(terminal)
 					terminals.append(terminal)
+					_draw_marker("TerminalGlow", _cell_center(x, y), 20.0, COLOR_TERMINAL_GLOW)
 					_draw_marker("Terminal", _cell_center(x, y), 10.0, COLOR_TERMINAL)
 				"4":
 					spawn = _cell_center(x, y)
@@ -135,7 +195,11 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 					enemy_spawns.append(_cell_center(x, y))
 				"6":
 					extraction = _cell_center(x, y)
-					_draw_marker("Extraction", _cell_center(x, y), 12.0, COLOR_EXTRACTION)
+					var beacon := ExtractionBeacon.new()
+					beacon.name = "Extraction"
+					beacon.position = _cell_center(x, y)
+					add_child(beacon)
+					_draw_marker("ExtractionGlow", _cell_center(x, y), 22.0, COLOR_EXTRACTION_GLOW)
 
 	return {
 		"spawn": spawn,
@@ -221,6 +285,24 @@ func _wall_runs(rows: Array, width: int, height: int) -> void:
 				])
 				visual.color = COLOR_WALL
 				body.add_child(visual)
+				# Edge treatment: top highlight + bottom shadow line per
+				# run (visual only; collision shape is unchanged).
+				var top_line := Line2D.new()
+				top_line.name = "WallTop"
+				top_line.width = 2.0
+				top_line.default_color = COLOR_WALL_TOP
+				top_line.points = PackedVector2Array([
+					Vector2(run_start * CELL_SIZE, top + 1.0),
+					Vector2(x * CELL_SIZE, top + 1.0)])
+				body.add_child(top_line)
+				var bottom_line := Line2D.new()
+				bottom_line.name = "WallShadow"
+				bottom_line.width = 3.0
+				bottom_line.default_color = COLOR_WALL_SHADOW
+				bottom_line.points = PackedVector2Array([
+					Vector2(run_start * CELL_SIZE, top + CELL_SIZE - 1.0),
+					Vector2(x * CELL_SIZE, top + CELL_SIZE - 1.0)])
+				body.add_child(bottom_line)
 				walls_root.add_child(body)
 				run_start = -1
 

@@ -36,7 +36,7 @@ var _touch_sprint: bool = false
 var _touch_controls: Control = null
 var _noise_timer: float = 0.0
 
-@onready var visual: Polygon2D = $Visual
+@onready var visual: Node2D = $Visual
 @onready var camera: Camera2D = $Camera2D
 
 const COLOR_STANDING := Color(0.24, 0.78, 0.85)
@@ -219,4 +219,7 @@ func _update_visual_state(delta: float) -> void:
 		target_color = COLOR_CROUCHED
 	elif movement_visual_state == MovementVisualState.SPRINT:
 		target_color = COLOR_SPRINT
-	visual.color = target_color
+	# State tint is applied to the whole agent rig (modulate) so every
+	# rig part (body/head/visor/pack) shifts with IDLE/WALK/SPRINT/CROUCH
+	# without becoming a second gameplay authority.
+	visual.modulate = target_color

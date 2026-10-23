@@ -20,12 +20,15 @@ const JOYSTICK_ZONE_WIDTH_RATIO: float = 0.45
 const BUTTON_RADIUS: float = 42.0
 const INTERACT_RADIUS: float = 52.0
 
-const COLOR_BASE := Color(1, 1, 1, 0.08)
-const COLOR_RING := Color(1, 1, 1, 0.25)
-const COLOR_KNOB := Color(0.24, 0.78, 0.85, 0.9)
-const COLOR_BTN := Color(1, 1, 1, 0.07)
-const COLOR_BTN_PRESSED := Color(0.24, 0.78, 0.85, 0.35)
-const COLOR_BTN_TEXT := Color(0.85, 0.88, 0.92, 0.9)
+## NEON NOIR touch language (visual upgrade): cyan-tinted translucent
+## fills, brighter rings, clear pressed states. Geometry (centers,
+## radii, hit zones) is unchanged - only presentation.
+const COLOR_BASE := Color(0.30, 0.85, 0.90, 0.10)
+const COLOR_RING := Color(0.55, 0.90, 0.95, 0.45)
+const COLOR_KNOB := Color(0.45, 0.95, 1.0, 0.85)
+const COLOR_BTN := Color(0.30, 0.85, 0.90, 0.13)
+const COLOR_BTN_PRESSED := Color(0.45, 0.95, 1.0, 0.32)
+const COLOR_BTN_TEXT := Color(0.88, 0.93, 0.97, 0.95)
 
 var _joystick_index: int = -1
 var _joystick_origin: Vector2 = Vector2.ZERO
@@ -69,19 +72,19 @@ func _layout_buttons() -> void:
 		"interact": {
 			"center": Vector2(screen.x - 110.0, screen.y - 120.0),
 			"radius": INTERACT_RADIUS,
-			"label": "ACT",
+			"label": "USE",
 			"pressed": false,
 		},
 		"crouch": {
 			"center": Vector2(screen.x - 226.0, screen.y - 76.0),
 			"radius": BUTTON_RADIUS,
-			"label": "CRCH",
+			"label": "CROUCH",
 			"pressed": false,
 		},
 		"sprint": {
 			"center": Vector2(screen.x - 196.0, screen.y - 192.0),
 			"radius": BUTTON_RADIUS,
-			"label": "SPRNT",
+			"label": "SPRINT",
 			"pressed": false,
 		},
 	}
@@ -189,10 +192,14 @@ func _draw() -> void:
 		draw_arc(btn["center"], btn["radius"], 0.0, TAU, 40, COLOR_RING, 2.0)
 		draw_string(
 			ThemeDB.fallback_font,
-			btn["center"] + Vector2(-24.0, 8.0),
+			btn["center"] + Vector2(-28.0, 7.0),
 			btn["label"],
 			HORIZONTAL_ALIGNMENT_CENTER,
-			48.0,
-			14,
+			56.0,
+			13,
 			COLOR_BTN_TEXT
 		)
+		# Subtle pressed ring flash: a second arc just inside the ring.
+		if btn["pressed"]:
+			draw_arc(btn["center"], btn["radius"] - 4.0, 0.0, TAU, 40,
+				Color(0.75, 1.0, 1.0, 0.5), 2.0)

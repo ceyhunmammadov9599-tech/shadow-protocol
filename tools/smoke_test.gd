@@ -1641,6 +1641,191 @@ func _ready() -> void:
 	_check(StealthSystem.light_count() == 0,
 		"Phase 7 fixture tears down cleanly")
 
+	# ================= M. Visual upgrade (presentation regression) ==========
+	# Player rig: four designed parts, unchanged collision.
+	var player_v: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(player_v)
+	player_v.position = Vector2(240, 240)
+	await _frames(5)
+	var rig: Node = player_v.get_node("Visual")
+	_check(rig.get_node_or_null("Body") != null and rig.get_node_or_null("Head") != null \
+		and rig.get_node_or_null("Visor") != null and rig.get_node_or_null("Pack") != null,
+		"player rig has body/head/visor/pack parts")
+	var p_shape: RectangleShape2D = player_v.get_node("CollisionShape2D").shape
+	_check(p_shape.size == Vector2(24, 24), "player collision unchanged 24x24, got %s" % p_shape.size)
+	Input.action_press("crouch")
+	Input.action_press("move_right")
+	await _frames(40)
+	_check(player_v.visual.modulate.is_equal_approx(player_v.COLOR_CROUCHED),
+		"crouch tint applied to rig (modulate)")
+	_check(player_v.visual.scale.x < 0.9 and player_v.visual.scale.y < 0.9,
+		"crouch rig scale reduced (got %.2f)" % player_v.visual.scale.y)
+	Input.action_release("crouch")
+	Input.action_press("sprint")
+	await _frames(40)
+	_check(player_v.visual.modulate.is_equal_approx(player_v.COLOR_SPRINT),
+		"sprint tint applied to rig")
+	Input.action_release("move_right")
+	Input.action_release("sprint")
+	await _frames(60)
+	_check(player_v.visual.modulate.is_equal_approx(player_v.COLOR_STANDING),
+		"idle tint restored")
+	player_v.queue_free()
+	await _frames(6)
+
+	# Enemy rig: state color + glyph mapping (real FSM values only).
+	var enemy_v: CharacterBody2D = load("res://scenes/enemy.tscn").instantiate()
+	add_child(enemy_v)
+	await _frames(3)
+	_check(enemy_v.get_node_or_null("Cap") != null and enemy_v.get_node_or_null("Visor") != null \
+		and enemy_v.get_node_or_null("Indicator") != null,
+		"enemy rig has cap/visor/indicator parts")
+	enemy_v.state = enemy_v.STATE_SUSPICIOUS
+	enemy_v._update_visual_state()
+	_check(enemy_v.get_node("Body").color.is_equal_approx(enemy_v.STATE_COLORS[enemy_v.STATE_SUSPICIOUS]),
+		"suspicious body color follows FSM state")
+	var ind: Label = enemy_v.get_node("Indicator")
+	_check(ind.visible and ind.text == "?", "suspicious glyph '?' shown")
+	enemy_v.state = enemy_v.STATE_ALERT
+	enemy_v._update_visual_state()
+	ind = enemy_v.get_node("Indicator")
+	_check(ind.visible and ind.text == "!" and ind.modulate.r > ind.modulate.g,
+		"alert glyph '!' shown in hot red")
+	_check(enemy_v.get_node("Visor").color.r > 0.9 and enemy_v.get_node("Visor").color.g < 0.5,
+		"alert visor goes hot")
+	enemy_v.state = enemy_v.STATE_PATROL
+	enemy_v._update_visual_state()
+	_check(not enemy_v.get_node("Indicator").visible, "patrol hides awareness glyph")
+	enemy_v.queue_free()
+	await _frames(6)
+
+	# Main fixture: environment, beacon, overlay, warning layer.
+	var m_v: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(m_v)
+	await _frames(10)
+	# LAYOUT_B carries restricted zones; the default legacy map has none.
+	await m_v.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(6)
+	var level_root: Node = m_v.get_node("LevelRoot")
+	_check(level_root.get_node_or_null("FloorSeams") != null and level_root.get_node("FloorSeams").get_point_count() > 8,
+		"floor panel seams drawn")
+	var wall_top: bool = false
+	for w in level_root.get_node("Walls").get_children():
+		if w.get_node_or_null("WallTop") != null and w.get_node_or_null("WallShadow") != null:
+			wall_top = true
+			break
+	_check(wall_top, "wall runs carry top highlight + shadow edges")
+	var zones_m: Array = m_v.level_data["zones"]
+	var zone_ok: bool = true
+	for zone in zones_m:
+		var zid: String = String(zone["id"])
+		if level_root.get_node_or_null("Zone_" + zid) == null \
+			or level_root.get_node_or_null("ZoneBorder_" + zid) == null \
+			or level_root.get_node_or_null("ZoneLabel_" + zid) == null:
+			zone_ok = false
+	_check(zone_ok and not zones_m.is_empty(),
+		"restricted zone overlays (fill + border + label) for every zone")
+	_check(level_root.get_node_or_null("ZoneLabel_" + String(zones_m[0]["id"])) != null \
+		and (level_root.get_node("ZoneLabel_" + String(zones_m[0]["id"])) as Label).text == String(zones_m[0]["id"]).to_upper(),
+		"zone label shows the real zone id")
+
+	# Extraction beacon: locked by default.
+	var beacon: Node = m_v.extraction_beacon
+	_check(beacon != null and beacon is ExtractionBeacon, "extraction renders as a beacon")
+	_check(not beacon.is_active(), "beacon starts locked (objectives pending)")
+
+	# Door visuals match collision state.
+	var door_v: Door = m_v.level_data["doors"][0]
+	_check(door_v.get_node("Visual").color == door_v.COLOR_CLOSED \
+		and door_v.get_node("Edge").default_color == door_v.COLOR_EDGE_CLOSED \
+		and not door_v.get_node("CollisionShape2D").disabled,
+		"closed door: panel + edge colors, collision solid")
+	door_v.set_state(true)
+	await _frames(30)  # 0.12s slide tween completes
+	_check(door_v.get_node("CollisionShape2D").disabled, "open door collision disabled")
+	_check(door_v.get_node("Visual").scale.x < 0.3, "open door panel retracted (slide)")
+	_check(door_v.get_node("Edge").default_color == door_v.COLOR_EDGE_OPEN, "open door edge green")
+	door_v.set_state(false)
+	await _frames(30)
+	_check(not door_v.get_node("CollisionShape2D").disabled \
+		and door_v.get_node("Visual").scale.x > 0.95,
+		"reclosed door: collision solid, panel restored")
+
+	# Terminal console states.
+	var term_v: Terminal = m_v.level_data["terminals"][0]
+	_check(term_v.get_node("Screen").color.is_equal_approx(term_v.COLOR_AVAILABLE),
+		"terminal screen available state")
+	term_v.set_highlight(true)
+	_check(term_v.get_node("Screen").color.is_equal_approx(term_v.COLOR_HIGHLIGHT),
+		"in-range terminal highlight follows the real nearest-target decision")
+	term_v.set_highlight(false)
+	term_v.complete()
+	_check(term_v.get_node("Screen").color.is_equal_approx(term_v.COLOR_COMPLETED) \
+		and term_v.get_node("Led").color.is_equal_approx(term_v.COLOR_COMPLETED),
+		"completed terminal: screen + LED green")
+	_check(not term_v.complete(), "second completion rejected")
+
+	# Beacon unlock follows the real extraction signal path.
+	m_v.mission_manager.on_terminal_completed(m_v.level_data["terminals"][1].terminal_id)
+	await _frames(10)
+	_check(beacon.is_active(), "beacon activates when extraction unlocks")
+
+	# Warning layer: mapping verified on an isolated instance (main
+	# pushes the real ratio every frame and would override a manual set).
+	var wl: Control = load("res://scripts/warning_layer.gd").new()
+	add_child(wl)
+	await _frames(3)
+	wl.set_ratio(0.6)
+	_check(wl.current_alpha() > 0.4, "critical detection shows warning edges")
+	wl.set_ratio(0.0)
+	_check(wl.current_alpha() < 0.01, "calm detection hides warning edges")
+	wl.queue_free()
+	# Integration: the live fixture keeps the warning calm while no
+	# enemy sees the player (real ratio from MissionManager).
+	await _frames(10)
+	_check(m_v.warning_layer.current_alpha() < 0.01,
+		"main drives the warning layer from the real detection ratio")
+
+	# HUD panel + touch button language.
+	_check(m_v.get_node_or_null("UI/HUDPanel") != null and m_v.get_node_or_null("UI/HUDAccent") != null,
+		"HUD sits on a panel with an accent strip")
+	_check(m_v.touch_layer._buttons["crouch"]["label"] == "CROUCH" \
+		and m_v.touch_layer._buttons["sprint"]["label"] == "SPRINT" \
+		and m_v.touch_layer._buttons["interact"]["label"] == "USE",
+		"touch buttons use full action words")
+	_check(m_v.touch_layer.BUTTON_RADIUS == 42.0 and m_v.touch_layer.INTERACT_RADIUS == 52.0,
+		"touch hit geometry unchanged")
+	var interact_fired: Array = []
+	m_v.touch_layer.interact_pressed.connect(func() -> void: interact_fired.append(1))
+	m_v.touch_layer._handle_press(m_v.touch_layer._buttons["interact"]["center"], 7)
+	m_v.touch_layer._handle_release(7)
+	_check(interact_fired.size() == 1, "USE button still fires the real interact signal")
+
+	# Mission overlay lifecycle: driven by the real state handlers.
+	m_v._on_mission_succeeded()
+	await _frames(10)
+	_check(m_v.mission_overlay.is_showing() and m_v.mission_overlay.shown_state() == 0 \
+		and (m_v.mission_overlay.get_node("Center/Panel/Title") as Label).text == "MISSION COMPLETE",
+		"success overlay appears from the real succeeded handler")
+	_check(m_v.mission_overlay.get_node("Center/Panel/RestartBtn") != null,
+		"success overlay offers a functional restart button")
+	await m_v.restart_mission()
+	_check(not m_v.mission_overlay.is_showing(), "overlay resets on restart")
+	m_v._on_mission_failed(&"spotted")
+	await _frames(10)
+	_check(m_v.mission_overlay.shown_state() == 1 \
+		and (m_v.mission_overlay.get_node("Center/Panel/Title") as Label).text == "MISSION FAILED",
+		"failure overlay appears from the real failed handler")
+	await m_v.restart_mission()
+	_check(not m_v.mission_overlay.is_showing(), "failure overlay resets on restart")
+	_check(m_v.get_node("UI").get_child_count() == m_v.get_node("UI").get_child_count() \
+		and m_v.get_tree().get_nodes_in_group("main_hud").size() == 0,
+		"no duplicate overlay instances accumulate")
+
+	m_v.queue_free()
+	await _frames(10)
+	_check(StealthSystem.light_count() == 0, "visual fixture tears down cleanly")
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)

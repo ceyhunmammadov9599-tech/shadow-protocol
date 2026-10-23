@@ -66,4 +66,7 @@ func _draw() -> void:
 	# Percentage caption.
 	var label: String = "VISIBILITY %d%%" % [roundi(display * 100.0)]
 	draw_string(ThemeDB.fallback_font, Vector2(2.0, bar_height + 15.0), label,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, COLOR_TEXT)
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 14, COLOR_TEXT)
+	# Accent underline anchors the bar to the tactical panel language.
+	draw_line(Vector2(0, bar_height + 2.0), Vector2(size.x, bar_height + 2.0),
+		Color(1, 1, 1, 0.06), 1.0)

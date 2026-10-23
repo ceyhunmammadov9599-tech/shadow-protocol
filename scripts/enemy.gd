@@ -105,13 +105,25 @@ var _noise_connected: bool = false
 const SEARCH_PROBES: Array[Vector2] = [
 	Vector2(0, 0), Vector2(56, 0), Vector2(0, 56), Vector2(-56, 0), Vector2(0, -56),
 ]
+## NEON NOIR palette (visual upgrade iteration): state colors are shared
+## with the awareness indicator and the visor tint so every displayed
+## cue maps 1:1 to the real FSM state.
 const STATE_COLORS: Dictionary = {
-	STATE_PATROL: Color(0.62, 0.65, 0.72),
-	STATE_SUSPICIOUS: Color(0.95, 0.78, 0.25),
-	STATE_INVESTIGATING: Color(0.95, 0.55, 0.2),
-	STATE_ALERT: Color(0.92, 0.28, 0.28),
-	STATE_SEARCHING: Color(0.75, 0.35, 0.85),
-	STATE_RETURNING: Color(0.45, 0.75, 0.9),
+	STATE_PATROL: Color(0.52, 0.56, 0.66),
+	STATE_SUSPICIOUS: Color(0.95, 0.72, 0.30),
+	STATE_INVESTIGATING: Color(0.98, 0.55, 0.22),
+	STATE_ALERT: Color(0.92, 0.25, 0.28),
+	STATE_SEARCHING: Color(0.72, 0.42, 0.88),
+	STATE_RETURNING: Color(0.45, 0.70, 0.85),
+}
+## Awareness glyph above the guard: "?" = unconfirmed (suspicion /
+## investigation / search), "!" = confirmed alert. PATROL/RETURNING show
+## nothing. Driven ONLY from the real FSM state.
+const STATE_GLYPHS: Dictionary = {
+	STATE_SUSPICIOUS: "?",
+	STATE_INVESTIGATING: "?",
+	STATE_SEARCHING: "?",
+	STATE_ALERT: "!",
 }
 
 
@@ -417,7 +429,25 @@ func _physics_process(delta: float) -> void:
 
 
 func _update_visual_state() -> void:
+	var state_color: Color = STATE_COLORS.get(state, Color.WHITE)
 	var body := get_node_or_null("Body") as Polygon2D
 	if body != null:
-		body.color = STATE_COLORS.get(state, Color.WHITE)
+		body.color = state_color
+	# Visor: bright warm band; goes hot red only on confirmed alert.
+	var visor := get_node_or_null("Visor") as Polygon2D
+	if visor != null:
+		visor.color = Color(1.0, 0.92, 0.55) if state != STATE_ALERT \
+			else Color(1.0, 0.35, 0.30)
+	# Facing cone: real AI facing, tinted by state (kept restrained).
+	var cone := get_node_or_null("FacingCone") as Polygon2D
+	if cone != null:
+		cone.color = Color(state_color.r, state_color.g, state_color.b, 0.28)
+	# Awareness glyph above the guard - real state only, never a fake cue.
+	var indicator := get_node_or_null("Indicator") as Label
+	if indicator != null:
+		var glyph: String = STATE_GLYPHS.get(state, "")
+		indicator.text = glyph
+		indicator.visible = not glyph.is_empty()
+		indicator.modulate = state_color if not glyph.is_empty() \
+			else Color.WHITE
 	queue_redraw()
