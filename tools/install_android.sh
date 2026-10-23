@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Shadow Protocol - deploy to a connected device with ADB, then launch.
+# REQUIRES a physical Android device connected via ADB. This step is
+# intentionally OUT OF SCOPE for the device-free build protocol and must
+# never be invoked by automated/host-only pipelines.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

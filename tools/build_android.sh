@@ -17,6 +17,11 @@ fail() { echo "ERROR: $1" >&2; exit 1; }
 command -v "$GODOT_BIN" >/dev/null 2>&1 || fail "Godot '$GODOT_BIN' not found (set GODOT_BIN)."
 "$GODOT_BIN" --version 2>/dev/null | grep -q "4.7.2" || fail "Expected Godot 4.7.2, got $("$GODOT_BIN" --version)."
 [ -d "$TEMPLATES_DIR" ] || fail "Export templates missing. Run tools/setup_android.sh (step 3)."
+SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
+if [ ! -x "$SDK_ROOT/build-tools/34.0.0/aapt2" ]; then
+  BT_ANY="$(ls -d "$SDK_ROOT"/build-tools/*/aapt2 2>/dev/null | head -n1)"
+  [ -n "$BT_ANY" ] || fail "Android SDK build-tools (aapt2) missing under $SDK_ROOT (set ANDROID_SDK_ROOT; run tools/setup_android.sh step 4/6)."
+fi
 
 mkdir -p "$ROOT/build"
 
@@ -34,7 +39,8 @@ if [ -n "${SHADOW_PROTOCOL_KEYSTORE:-}" ]; then
 fi
 
 echo "Exporting APK (preset: $PRESET)..."
-"$GODOT_BIN" --headless --path "$ROOT" --export-project "$PRESET" "$OUT" || fail "Export failed."
+# Bounded execution: 15-minute cap on the export per the phase protocol.
+timeout 900 "$GODOT_BIN" --headless --path "$ROOT" --export-debug "$PRESET" "$OUT" || fail "Export failed."
 
 [ -s "$OUT" ] || fail "Export produced no APK."
 echo "OK: $OUT ($(du -h "$OUT" | cut -f1))"

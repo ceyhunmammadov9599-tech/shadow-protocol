@@ -176,18 +176,26 @@ All commands are run from the repository root.
        GODOT_BIN=/path/to/godot tools/validate_project.sh
 
 2. Prepare the Android toolchain (verifies Java 17+, Godot 4.7.2,
-   export templates, Android SDK cmdline-tools, debug keystore):
+   export templates 4.7.2.stable, Android SDK (cmdline-tools or a
+   directly provisioned build-tools/platforms layout), build-tools
+   aapt2+apksigner, debug keystore). Installs nothing; add
+   --preflight for a machine-usable check that exits 0 only when
+   every prerequisite is present:
 
        tools/setup_android.sh
+       tools/setup_android.sh --preflight
 
 3. Build the APK (debug signing by default; release signing only through
    SHADOW_PROTOCOL_KEYSTORE / SHADOW_PROTOCOL_KEYSTORE_USER /
    SHADOW_PROTOCOL_KEYSTORE_PASSWORD environment variables - secrets are
-   never committed):
+   never committed). Requires ANDROID_SDK_ROOT (or ~/android-sdk) with
+   build-tools 34.0.0, platform android-34, platform-tools and a JDK 17+
+   (JAVA_HOME); the export runs under a 15-minute bound:
 
        tools/build_android.sh
 
-4. Install and launch on a connected device:
+4. Install and launch on a connected device (requires a physical Android
+   device via ADB; never part of device-free pipelines):
 
        tools/install_android.sh
 

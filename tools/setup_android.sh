@@ -14,7 +14,8 @@ CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-lin
 
 step() { printf '\n==> %s\n' "$1"; }
 ok()   { printf '    OK: %s\n' "$1"; }
-missing() { printf '    MISSING: %s\n' "$1"; }
+MISSING_COUNT=0
+missing() { printf '    MISSING: %s\n' "$1"; MISSING_COUNT=$((MISSING_COUNT+1)); }
 
 step "1. Java (17+)"
 if command -v java >/dev/null 2>&1 && java -version 2>&1 | head -n1 | grep -qE 'version "?(1[7-9]|[2-9][0-9])'; then
@@ -46,7 +47,11 @@ else
 fi
 
 step "4. Android SDK"
-if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+# A usable export SDK needs build-tools/platforms; sdkmanager is one way
+# to provision them (and useful later), but not the only valid layout.
+if [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ] \
+   || ls -d "$ANDROID_SDK_ROOT"/build-tools/* >/dev/null 2>&1 \
+   || ls -d "$ANDROID_SDK_ROOT"/platforms/* >/dev/null 2>&1; then
   ok "$ANDROID_SDK_ROOT"
 else
   missing "Android cmdline-tools at $ANDROID_SDK_ROOT"
@@ -65,6 +70,30 @@ if [ -f "$KS" ]; then
 else
   echo "    No debug keystore yet. Create one with:"
   echo "      keytool -genkeypair -keystore $KS -storepass android -alias androiddebugkey -keypass android -dname 'CN=Android Debug,O=Android,C=US'"
+fi
+
+step "6. Android build-tools (aapt2/apksigner)"
+BT_DIR=""
+for bt in "$ANDROID_SDK_ROOT"/build-tools/*; do
+  [ -x "$bt/aapt2" ] && [ -x "$bt/apksigner" ] && BT_DIR="$bt" && break
+done
+if [ -n "$BT_DIR" ]; then
+  ok "$BT_DIR"
+else
+  missing "build-tools with aapt2 + apksigner under $ANDROID_SDK_ROOT/build-tools"
+  echo "    Install with sdkmanager: \"build-tools;34.0.0\""
+fi
+
+# --preflight: machine-usable check mode. Same non-destructive detections,
+# installs nothing, never touches a device; exits 0 only when every
+# prerequisite is present.
+if [ "${1:-}" = "--preflight" ]; then
+  if [ "$MISSING_COUNT" -eq 0 ]; then
+    printf '\nPreflight: ALL PREREQUISITES PRESENT.\n'
+    exit 0
+  fi
+  printf '\nPreflight: %d prerequisite(s) MISSING.\n' "$MISSING_COUNT"
+  exit 1
 fi
 
 printf '\nSummary complete. Re-run this script until every step reports OK.\n'
