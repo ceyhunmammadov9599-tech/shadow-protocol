@@ -9,6 +9,26 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
+Phase 3 (enemy artificial intelligence) - complete at headless-verification
+level:
+
+- Enemy guard (CharacterBody2D, scenes/enemy.tscn) with a six-state AI:
+  PATROL, SUSPICIOUS, INVESTIGATING, ALERT, SEARCHING, RETURNING -
+  explicit transitions and a state_changed signal
+- Visual detection: vision range + FOV dot-product + physics raycast
+  wall obstruction; detection strength derived from the Phase 2 player
+  visibility coefficient (distance-scaled, close-range floor)
+- Suspicion accumulation and decay with configurable thresholds; enemies
+  chase the live player only while visible and anchor to the last known
+  position otherwise; bounded search; safe return to patrol
+- Noise reaction via StealthSystem.noise_emitted with documented
+  priority rules (visual contact wins; duplicates do not restart
+  investigations); subscriptions cleaned up on removal
+- Throttled AI decisions (configurable interval) with unthrottled
+  movement; multiple enemies keep independent state
+- Grid value 5 spawns enemies (two in the test level) with deterministic
+  wall-aware patrol routes; DETECTED status feedback
+
 Phase 2 (stealth and visibility) - complete at headless-verification level:
 
 - Dynamic LightSource component (extends PointLight2D): one parameter set

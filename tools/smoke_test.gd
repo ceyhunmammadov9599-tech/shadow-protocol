@@ -180,6 +180,20 @@ func _ready() -> void:
 	add_child(main)
 	await _frames(5)  # level generated, lights spawned, meter driven
 	_check(stealth.light_count() == 5, "main scene registers 4 static + 1 moving light, got %d" % stealth.light_count())
+	# Phase 3 grid integration (P3-T5).
+	var wall_bodies: int = main.get_node("LevelRoot/Walls").get_child_count()
+	_check(wall_bodies >= 20, "grid value 2 produces real wall collision bodies (>= 20), got %d" % wall_bodies)
+	var enemies_main: Array = main.enemies
+	_check(enemies_main.size() == 2, "grid value 5 spawns two enemies, got %d" % enemies_main.size())
+	if enemies_main.size() == 2:
+		var exp_spawns: Array[Vector2] = [Vector2(696.0, 312.0), Vector2(216.0, 600.0)]
+		var positions_ok: bool = true
+		for i in range(2):
+			if enemies_main[i].global_position != exp_spawns[i]:
+				positions_ok = false
+		_check(positions_ok, "enemy positions match grid cell centers (not inside walls)")
+		var patrolling: bool = enemies_main[0].state == &"patrol" and enemies_main[1].state == &"patrol"
+		_check(patrolling, "spawned enemies start in PATROL")
 
 	var main_player: CharacterBody2D = main.get_node("Player")
 	var meter: Control = main.get_node("UI/VisibilityMeter")
@@ -215,12 +229,200 @@ func _ready() -> void:
 	await _frames(2)
 	_check(stealth.light_count() == 0, "main scene teardown unregisters its lights, got %d" % stealth.light_count())
 
+	# ================= F. Enemy AI (Phase 3) =================
+	var stealth3: Node = get_node("/root/StealthSystem")
+	var p3: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(p3)
+	await _frames(3)
+
+	# F1: enemy starts in PATROL.
+	var e1: CharacterBody2D = _mk_enemy(p3, Vector2(300, 200), Vector2.RIGHT)
+	_check(e1.state == &"patrol", "enemy starts in PATROL")
+
+	# F2: patrol advances toward waypoints.
+	var e2: CharacterBody2D = _mk_enemy(p3, Vector2(300, 300), Vector2.RIGHT)
+	e2.set_patrol_route([Vector2(300, 300), Vector2(420, 300), Vector2(300, 300)])
+	await _frames(60)
+	_check(e2.global_position.x > 305.0 and e2.state == &"patrol",
+		"patrol advances toward the next waypoint (x=%.1f, state=%s)" % [e2.global_position.x, e2.state])
+
+	# F3: player outside FOV is not detected.
+	p3.position = Vector2(200, 200)  # behind e1 (facing right)
+	p3.set_visibility(0.25)
+	await _frames(20)
+	_check(absf(e1.detection_strength()) < TOL and absf(e1.suspicion) < TOL,
+		"player outside FOV is not detected (strength=%.3f, suspicion=%.3f)" % [e1.detection_strength(), e1.suspicion])
+
+	# F4: player within clear FOV is eligible for detection.
+	p3.position = Vector2(400, 200)
+	await _frames(2)
+	_check(e1.detection_strength() > 0.0,
+		"player within clear FOV is eligible (strength=%.3f)" % e1.detection_strength())
+
+	# F5: a wall blocks visual detection.
+	var wall := StaticBody2D.new()
+	var wall_shape := CollisionShape2D.new()
+	var wall_rect := RectangleShape2D.new()
+	wall_rect.size = Vector2(16.0, 96.0)
+	wall_shape.shape = wall_rect
+	wall.position = Vector2(350, 200)
+	wall.add_child(wall_shape)
+	add_child(wall)
+	await _frames(5)
+	_check(not e1.can_see_player() and absf(e1.suspicion) < TOL,
+		"wall blocks visual detection (can_see=%s, suspicion=%.3f)" % [e1.can_see_player(), e1.suspicion])
+
+	# F6: higher-visibility player produces stronger detection (controlled).
+	wall.queue_free()
+	await _frames(5)
+	p3.set_visibility(1.0)
+	var strength_high: float = e1.detection_strength()
+	p3.set_visibility(0.25)
+	var strength_low: float = e1.detection_strength()
+	_check(strength_high > strength_low + 0.1,
+		"high visibility detected more strongly than low (%.3f vs %.3f)" % [strength_high, strength_low])
+
+	# F7: suspicion accumulates predictably while visible.
+	p3.set_visibility(1.0)
+	await _frames(12)
+	var susp_a: float = e1.suspicion
+	await _frames(36)
+	var susp_b: float = e1.suspicion
+	_check(susp_b > susp_a + TOL, "suspicion accumulates while visible (%.3f -> %.3f)" % [susp_a, susp_b])
+
+	# F8: suspicion decays when evidence disappears.
+	p3.position = Vector2(1500, 1500)  # far out of vision range
+	await _frames(30)
+	_check(e1.suspicion < susp_b, "suspicion decays without evidence (%.3f was %.3f)" % [e1.suspicion, susp_b])
+
+	# F9: confirmed detection enters ALERT.
+	p3.position = Vector2(400, 200)
+	p3.set_visibility(1.0)
+	var alerted: bool = await _await_state(e1, &"alert", 400)
+	_check(alerted, "confirmed detection enters ALERT (state=%s, suspicion=%.2f)" % [e1.state, e1.suspicion])
+
+	# F10: losing sight preserves the last known position.
+	var lk: Vector2 = e1.last_known_position()
+	p3.position = Vector2(400, 400)  # moved out of FOV/behind cover
+	await _frames(30)
+	_check(e1.last_known_position() == lk and e1.last_known_position() != p3.global_position,
+		"last known position preserved after losing sight (%s, player now %s)" % [e1.last_known_position(), p3.global_position])
+
+	# F11/F12: bounded search uses the last known position, then returns to patrol.
+	var searching: bool = await _await_state(e1, &"searching", 200)
+	_check(searching, "lost contact transitions to SEARCHING (state=%s)" % e1.state)
+	if searching:
+		var probe: Vector2 = e1.current_target()
+		_check(probe.distance_to(lk) <= 120.0 and probe.distance_to(p3.global_position) > 60.0,
+			"search probes near the last known position, not the hidden player (%s)" % probe)
+	var patrolling_again: bool = await _await_state(e1, &"patrol", 900)
+	_check(patrolling_again, "search timeout returns the enemy to PATROL (state=%s)" % e1.state)
+
+	# F13: nearby noise triggers INVESTIGATING.
+	var e3: CharacterBody2D = _mk_enemy(p3, Vector2(300, 500), Vector2.RIGHT)
+	stealth3.publish_noise(Vector2(2000, 2000), 150.0, &"player", &"walk")
+	await _frames(10)
+	_check(e3.state == &"patrol", "noise beyond hearing range is ignored (state=%s)" % e3.state)
+	stealth3.publish_noise(Vector2(360, 500), 200.0, &"player", &"walk")
+	await _frames(10)
+	_check(e3.state == &"investigating" and e3.last_sound_target() == Vector2(360, 500),
+		"nearby noise triggers INVESTIGATING toward the sound (state=%s, target=%s)" % [e3.state, e3.last_sound_target()])
+
+	# F15: duplicate noise does not restart the investigation.
+	var inv_target: Vector2 = e3.current_target()
+	stealth3.publish_noise(Vector2(361, 501), 200.0, &"player", &"walk")
+	await _frames(10)
+	_check(e3.state == &"investigating" and e3.current_target() == inv_target,
+		"duplicate noise does not reset the investigation (state=%s)" % e3.state)
+
+	# F16: confirmed visual contact takes priority over ordinary noise.
+	var e5: CharacterBody2D = _mk_enemy(p3, Vector2(600, 200), Vector2.RIGHT)
+	p3.position = Vector2(700, 200)
+	p3.set_visibility(1.0)
+	var e5_alerted: bool = await _await_state(e5, &"alert", 400)
+	if e5_alerted:
+		stealth3.publish_noise(Vector2(1200, 1200), 320.0, &"player", &"sprint")
+		await _frames(20)
+		_check(e5.state == &"alert" and e5.current_target().distance_to(p3.global_position) < 5.0,
+			"ALERT ignores noise and keeps visual priority (state=%s)" % e5.state)
+	else:
+		_check(false, "F16 fixture failed: enemy did not reach ALERT")
+	e5.queue_free()
+	p3.position = Vector2(400, 200)
+
+	# F17: multiple enemies maintain independent state.
+	var e6: CharacterBody2D = _mk_enemy(p3, Vector2(300, 700), Vector2.RIGHT)
+	var e7: CharacterBody2D = _mk_enemy(p3, Vector2(900, 700), Vector2.RIGHT)
+	stealth3.publish_noise(Vector2(350, 700), 150.0, &"player", &"walk")
+	await _frames(10)
+	_check(e6.state == &"investigating" and e7.state == &"patrol",
+		"multiple enemies keep independent states (%s vs %s)" % [e6.state, e7.state])
+
+	# F18: enemy removal cleans up its subscription.
+	var connections_before: int = stealth3.noise_emitted.get_connections().size()
+	e6.queue_free()
+	await _frames(3)
+	var connections_after: int = stealth3.noise_emitted.get_connections().size()
+	_check(connections_after == connections_before - 1,
+		"removing an enemy disconnects exactly its noise subscription (%d -> %d)" % [connections_before, connections_after])
+	stealth3.publish_noise(Vector2(350, 700), 150.0, &"player", &"walk")
+	await _frames(5)
+	_check(true, "publishing after enemy removal does not crash")
+
+	# F19: AI decision throttling operates as configured.
+	var e8: CharacterBody2D = _mk_enemy(p3, Vector2(500, 700), Vector2.RIGHT)
+	e8.ai_interval = 0.05
+	var e9: CharacterBody2D = _mk_enemy(p3, Vector2(600, 700), Vector2.RIGHT)
+	e9.ai_interval = 0.25
+	await _frames(90)  # ~1.5 s of physics time
+	_check(e8.decision_ticks >= 15 and e9.decision_ticks >= 3 and e9.decision_ticks * 2 <= e8.decision_ticks,
+		"AI throttling matches the configured interval (fast=%d, slow=%d ticks)" % [e8.decision_ticks, e9.decision_ticks])
+
+	# F20: missing player references do not crash the scene.
+	var e10: CharacterBody2D = _mk_enemy(p3, Vector2(700, 500), Vector2.RIGHT)
+	e10.set_player(null)
+	await _frames(30)
+	_check(e10.state == &"patrol", "enemy with no player reference keeps running (state=%s)" % e10.state)
+	var doomed: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(doomed)
+	e10.set_player(doomed)
+	doomed.queue_free()
+	await _frames(30)
+	_check(e10.state == &"patrol", "enemy survives the player reference being freed (state=%s)" % e10.state)
+
+	p3.queue_free()
+	for child: Node in get_children():
+		if child is Enemy:
+			child.queue_free()
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)
 	else:
 		print("SMOKE TEST: %d check(s) FAILED" % failures)
 		get_tree().quit(1)
+
+
+## Instantiates a standalone enemy fixture: standing patrol (single point),
+## explicit facing, fast decisions, given a player reference.
+func _mk_enemy(p: CharacterBody2D, at: Vector2, face: Vector2) -> CharacterBody2D:
+	var enemy: CharacterBody2D = (load("res://scenes/enemy.tscn") as PackedScene).instantiate()
+	enemy.position = at
+	add_child(enemy)
+	enemy.set_player(p)
+	enemy.set_patrol_route([at])
+	enemy.ai_interval = 0.05
+	enemy.facing = face
+	return enemy
+
+
+## Awaits (bounded) until the enemy reaches the given state.
+func _await_state(enemy: CharacterBody2D, wanted: StringName, max_frames: int) -> bool:
+	for i in range(max_frames):
+		if enemy.state == wanted:
+			return true
+		await get_tree().physics_frame
+	return enemy.state == wanted
 
 
 func _frames(n: int) -> void:
