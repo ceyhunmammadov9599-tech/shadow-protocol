@@ -9,6 +9,27 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
+Phase 5 (mission gameplay) - complete at headless-verification level:
+
+- Interactive terminals (scripts/terminal.gd): spawned from grid
+  markers with deterministic ids; context-sensitive INTERACT via the
+  existing keyboard action and touchscreen contract; nearest eligible
+  target, physics line-of-sight (walls and closed doors block); one
+  press = one target; duplicate completion impossible
+- Mission manager (scripts/mission_manager.gd): READY/ACTIVE/
+  SUCCEEDED/FAILED with final-state guards; objectives tracked by
+  stable id across any layout; extraction locked until all objectives
+  complete, success only inside the extraction region; invalid
+  missions rejected, never falsely successful
+- Failure rule: sustained genuine visual contact (enemy can_see_
+  player) fills a configurable detection grace timer that fully resets
+  when contact ends; restricted zones double the pressure; suspicion
+  and noise never fail the mission; multiple enemies never multiply
+  the rate
+- Door interaction: INTERACT opens nearby closed doors (immediate
+  collision + vision + navigation update); restricted-zone entry/exit
+  feedback; mission restart (R) resets everything with no leaks
+
 Phase 4 (procedural level generation) - complete at headless-verification
 level:
 

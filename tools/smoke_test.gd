@@ -668,6 +668,338 @@ func _ready() -> void:
 	_check(not stealth4.is_cell_blocked(Vector2i(7, 7)),
 		"door registrations are cleared after teardown")
 
+	# ================= H. Mission gameplay (Phase 5) =================
+	await _frames(5)  # let section G teardown settle
+	var m5: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(m5)
+	await _frames(12)
+	var mm: MissionManager = m5.mission_manager
+	var ev := {"succeeded": 0, "failed": 0, "progress": [], "zones": [], "rejected": 0, "extract": []}
+	mm.mission_succeeded.connect(func(): ev["succeeded"] += 1)
+	mm.mission_failed.connect(func(_r): ev["failed"] += 1)
+	mm.objective_progress_changed.connect(func(done, total): ev["progress"].append([done, total]))
+	mm.restricted_zone_changed.connect(func(z): ev["zones"].append(z))
+	mm.mission_rejected.connect(func(_r): ev["rejected"] += 1)
+	mm.extraction_availability_changed.connect(func(av): ev["extract"].append(av))
+
+	# H01/H02: mission initializes correctly from the legacy level.
+	_check(mm.state == MissionManager.State.ACTIVE and mm.objectives_total() == 1
+		and mm.objectives_done() == 0,
+		"mission initializes ACTIVE with the level's objective count (%d/%d)" % [mm.objectives_done(), mm.objectives_total()])
+
+	# H03: terminal object at the marker cell center with a stable id.
+	var term0: Node = m5.level_data["terminals"][0]
+	_check(term0.terminal_id == &"terminal_1" and term0.global_position == Vector2(1224.0, 72.0)
+		and not term0.is_completed(),
+		"terminal spawns at the '3' cell center with stable id")
+
+	# H04: interaction outside range is rejected (genuine input action).
+	m5.player.global_position = Vector2(72.0, 72.0)
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(not term0.is_completed() and mm.objectives_done() == 0,
+		"interaction outside range does nothing (objectives %d)" % mm.objectives_done())
+
+	# H12/H13: early extraction does nothing while objectives incomplete.
+	m5.player.global_position = Vector2(1128.0, 600.0)
+	await _frames(30)
+	_check(mm.state == MissionManager.State.ACTIVE and not mm.extraction_available(),
+		"reaching extraction early does not win the mission")
+
+	# H05 (touch contract): in-range interaction completes the terminal.
+	m5.player.global_position = Vector2(1224.0, 120.0)
+	await _frames(3)
+	(m5.get_node("UI/TouchLayer") as Control).interact_pressed.emit()
+	await _frames(3)
+	_check(term0.is_completed() and mm.objectives_done() == 1,
+		"in-range touch interaction completes the terminal")
+
+	# H09/H10: repeated activation does not double-count; progress updates.
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(not term0.complete() and mm.objectives_done() == 1 and ev["progress"].has([1, 1]),
+		"duplicate completion rejected and progress event delivered")
+
+	# H36 end-to-end (keyboard path): complete -> unlock -> extract -> success.
+	await m5.restart_mission()
+	await _frames(4)
+	m5.player.global_position = Vector2(1224.0, 120.0)
+	await _frames(2)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(mm.objectives_done() == 1 and mm.extraction_available(),
+		"keyboard interaction completes the objective and unlocks extraction")
+	m5.player.global_position = Vector2(1128.0, 600.0)
+	await _frames(4)
+	_check(mm.state == MissionManager.State.SUCCEEDED and ev["succeeded"] == 1,
+		"entering extraction after completion triggers success exactly once")
+	await _frames(30)
+	_check(ev["succeeded"] == 1 and mm.state == MissionManager.State.SUCCEEDED,
+		"success occurs exactly once (no repeated transitions)")
+
+	# H17: success prevents later failure (a 0.2 s grace would fail fast).
+	mm.detection_grace = 0.2
+	var e_s: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, -1))
+	m5.player.global_position = Vector2(72.0, 72.0)
+	await _frames(40)
+	_check(mm.state == MissionManager.State.SUCCEEDED and ev["failed"] == 0,
+		"no failure transition after success")
+
+	# --- detection rules (legacy map) ---
+	await m5.restart_mission()
+	mm.detection_grace = 1.0
+	await _frames(4)
+
+	# H22/H23: suspicion/noise alone never fail.
+	m5.player.global_position = Vector2(72.0, 72.0)
+	var e_noise: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, 1))  # facing away
+	StealthSystem.publish_noise(Vector2(72.0, 168.0), 200.0, &"player", &"walk")
+	await _frames(90)
+	_check(mm.state == MissionManager.State.ACTIVE and absf(mm.detection_timer) < TOL
+		and e_noise.state != &"patrol",
+		"noise investigation alone does not fill the detection timer (state=%s)" % e_noise.state)
+
+	# H24: sustained confirmed visual detection triggers failure.
+	var e_det: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, -1))
+	await _frames(80)
+	_check(mm.state == MissionManager.State.FAILED and ev["failed"] >= 1,
+		"sustained genuine visual detection fails the mission")
+
+	# H25: breaking line of sight resets the timer (documented rule).
+	await m5.restart_mission()
+	await _frames(2)
+	var e_los: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, -1))
+	await _frames(30)
+	var t_mid: float = mm.detection_timer
+	m5.player.global_position = Vector2(1500.0, 1500.0)
+	await _frames(5)
+	_check(t_mid > 0.05 and absf(mm.detection_timer) < TOL,
+		"losing line of sight fully resets the detection timer (%.3f -> %.3f)" % [t_mid, mm.detection_timer])
+	await _frames(90)
+	_check(mm.state == MissionManager.State.ACTIVE,
+		"no failure after contact ends (timer rule honored)")
+
+	# H26: restricted-zone detection follows the documented 2x pressure rule.
+	await m5.restart_mission()
+	await _frames(2)
+	m5.player.global_position = Vector2(720.0, 264.0)  # inside zone_hall
+	var e_zone: CharacterBody2D = _mk_main_enemy(m5, Vector2(720.0, 168.0), Vector2(0, 1))
+	await _frames(40)  # 0.67 s: 2x rate reaches the 1.0 s grace
+	_check(mm.state == MissionManager.State.FAILED,
+		"genuine detection inside a restricted zone fails faster (2x pressure)")
+	await m5.restart_mission()
+	await _frames(2)
+	m5.player.global_position = Vector2(72.0, 72.0)  # outside every zone
+	var e_norm: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, -1))
+	await _frames(40)
+	_check(mm.state == MissionManager.State.ACTIVE,
+		"same detection outside a restricted zone has not failed yet (1x rate)")
+
+	# H27: multiple enemies never multiply detection pressure.
+	await m5.restart_mission()
+	await _frames(2)
+	var e_m1: CharacterBody2D = _mk_main_enemy(m5, Vector2(72.0, 168.0), Vector2(0, -1))
+	var e_m2: CharacterBody2D = _mk_main_enemy(m5, Vector2(168.0, 72.0), Vector2(-1, 0))
+	await _frames(40)
+	_check(mm.state == MissionManager.State.ACTIVE,
+		"two seeing enemies do not double the failure rate")
+	await _frames(40)
+	_check(mm.state == MissionManager.State.FAILED and ev["failed"] >= 2,
+		"failure eventually occurs once, regardless of enemy count")
+
+	# H18: failure prevents later success.
+	m5.player.global_position = Vector2(1128.0, 600.0)
+	await _frames(30)
+	_check(mm.state == MissionManager.State.FAILED and ev["succeeded"] == 1,
+		"no success transition after failure (early extraction ignored)")
+
+	# H19/H20/H21: restricted-zone tracking, entry/exit, no repeats.
+	await m5.restart_mission()
+	mm.detection_grace = 3.0
+	await _frames(2)
+	var zone_events_before: int = (ev["zones"] as Array).size()
+	m5.player.global_position = Vector2(720.0, 264.0)
+	await _frames(30)
+	_check(mm.current_zone == &"zone_hall" and (ev["zones"] as Array).size() == zone_events_before + 1,
+		"restricted-zone entry detected once")
+	m5.player.global_position = Vector2(1500.0, 1500.0)
+	await _frames(5)
+	_check(mm.current_zone == &"" and (ev["zones"] as Array).size() == zone_events_before + 2,
+		"zone exit clears the tracked zone exactly once")
+
+	# H34/H35: freed terminal/enemy references stay safe.
+	var term_free: Node = m5.level_data["terminals"][0]
+	term_free.queue_free()
+	await _frames(3)
+	m5.player.global_position = Vector2(1224.0, 120.0)
+	var target_after_free: Node = m5._find_interact_target(true)
+	_check(target_after_free == null and mm.state == MissionManager.State.ACTIVE,
+		"mission remains safe when a terminal is freed")
+	var e_free: CharacterBody2D = _mk_main_enemy(m5, Vector2(168.0, 72.0), Vector2(-1, 0))
+	e_free.queue_free()
+	await _frames(5)
+	_check(mm.state == MissionManager.State.ACTIVE,
+		"mission remains safe when an enemy is freed")
+
+	# --- layout B: doors, obstruction, tie-breaking, restart ---
+	await m5.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(6)
+	_check(mm.state == MissionManager.State.ACTIVE and mm.objectives_total() == 2,
+		"layout B mission starts with its own objective count (2)")
+	m5.interaction_radius = 320.0
+	var term_b1: Node = m5.level_data["terminals"][0]
+	var term_b2: Node = m5.level_data["terminals"][1]
+	var door_b: Node = null
+	for d_b: Node in m5.level_data["doors"]:
+		if d_b.cell == Vector2i(11, 4):
+			door_b = d_b
+	_check(door_b != null and not door_b.is_open and mm.objectives_done() == 0,
+		"fresh mission starts with closed doors and no completed objectives")
+
+	# H06: interaction through an obstructing wall is rejected.
+	m5.player.global_position = Vector2(408.0, 408.0)
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(not term_b1.is_completed(),
+		"terminal behind a solid wall cannot be used at radial distance")
+
+	# H07: closed door obstructs the terminal behind it (door is the target).
+	m5.player.global_position = Vector2(504.0, 216.0)
+	await _frames(3)
+	var tgt_closed: Node = m5._find_interact_target(true)
+	_check(tgt_closed is Door,
+		"closed door takes target priority: terminal behind it is obstructed")
+
+	# H08/H28: one press activates exactly one target (nearest).
+	m5.interaction_radius = 100.0
+	m5.player.global_position = Vector2(456.0, 216.0)
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(term_b1.is_completed() and not door_b.is_open,
+		"one press activates only the nearest eligible target (terminal, not door)")
+
+	# H29: opening the door makes the passage usable for interaction.
+	m5.interaction_radius = 320.0
+	m5.player.global_position = Vector2(600.0, 216.0)
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(door_b.is_open,
+		"nearby door interaction opens the door")
+	var tgt_open: Node = m5._find_interact_target(true)
+	_check(tgt_open is Terminal,
+		"open door no longer obstructs the terminal beyond it")
+
+	# H11: second terminal completes independently; H37: full B loop.
+	m5.player.global_position = Vector2(792.0, 264.0)
+	await _frames(2)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(term_b2.is_completed() and mm.objectives_done() == 2 and mm.extraction_available(),
+		"multiple terminals complete independently and unlock extraction")
+	m5.player.global_position = Vector2(1272.0, 648.0)
+	await _frames(4)
+	_check(mm.state == MissionManager.State.SUCCEEDED,
+		"layout B full mission loop succeeds (terminals -> extraction)")
+
+	# H30/H31/H32: restart clears objective records, doors, timers, zones.
+	var zone_id_now: StringName = mm.current_zone
+	var success_before: int = ev["succeeded"]
+	await m5.restart_mission()
+	await _frames(4)
+	_check(mm.state == MissionManager.State.ACTIVE and mm.objectives_done() == 0
+		and not is_instance_valid(term_b1) and mm.detection_timer == 0.0 and mm.current_zone == &"",
+		"restart clears objectives, detection and zone state")
+
+	# H33: no subscription leaks across restart.
+	var mm_conns: int = mm.objective_completed.get_connections().size()
+	var noise_conns: int = StealthSystem.noise_emitted.get_connections().size()
+	await m5.restart_mission()
+	await _frames(4)
+	_check(mm.objective_completed.get_connections().size() == mm_conns
+		and StealthSystem.noise_emitted.get_connections().size() == noise_conns,
+		"restart leaks no mission or noise subscriptions")
+
+	# H38: layout C full loop (restricted vault).
+	await m5.load_level(LevelCatalog.LAYOUT_C)
+	await _frames(6)
+	_check(mm.state == MissionManager.State.ACTIVE and mm.objectives_total() == 1,
+		"layout C mission starts correctly (vault terminal)")
+	m5.player.global_position = Vector2(648.0, 360.0)
+	await _frames(2)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	m5.player.global_position = Vector2(1272.0, 648.0)
+	await _frames(4)
+	_check(mm.state == MissionManager.State.SUCCEEDED and mm.objectives_done() == 1,
+		"layout C full mission loop succeeds")
+
+	# H41: switching layouts does not carry over mission completion.
+	await m5.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(6)
+	_check(mm.state == MissionManager.State.ACTIVE and mm.objectives_done() == 0
+		and not mm.extraction_available(),
+		"loading another layout starts a fresh mission with no carried progress")
+
+	# H39: seeded layout supports a complete mission loop.
+	mm.detection_grace = 10.0
+	var seeded_desc: Dictionary = LevelCatalog.generate_layout(42)
+	await m5.load_level(seeded_desc)
+	await _frames(6)
+	var seeded_terminals: Array[Vector2] = _all_marker_centers(seeded_desc["rows"], "3")
+	var seeded_extract: Vector2 = _marker_center(seeded_desc["rows"], "6")
+	for st: Vector2 in seeded_terminals:
+		m5.player.global_position = st
+		await _frames(2)
+		Input.action_press("interact")
+		await _frames(3)
+		Input.action_release("interact")
+	mm.detection_grace = 3.0
+	m5.player.global_position = seeded_extract
+	await _frames(4)
+	_check(mm.state == MissionManager.State.SUCCEEDED and mm.objectives_done() == seeded_terminals.size(),
+		"seeded layout supports the full mission loop (%d objectives)" % seeded_terminals.size())
+
+	# H40: same seed -> same mission-objective structure.
+	var s42a: Dictionary = LevelCatalog.generate_layout(42)
+	var s42b: Dictionary = LevelCatalog.generate_layout(42)
+	_check(_all_marker_centers(s42a["rows"], "3") == _all_marker_centers(s42b["rows"], "3")
+		and _marker_center(s42a["rows"], "6") == _marker_center(s42b["rows"], "6"),
+		"same seed produces the same mission-objective structure")
+
+	# H43: invalid mission metadata is rejected, never falsely successful.
+	var mm_bad: MissionManager = MissionManager.new()
+	add_child(mm_bad)
+	var bad_data: Dictionary = m5.level_data.duplicate()
+	bad_data.erase("extraction")
+	mm_bad.start_mission(bad_data, [])
+	var rejected_1: bool = mm_bad.state == MissionManager.State.READY
+	var bad_data2: Dictionary = m5.level_data.duplicate()
+	bad_data2["terminals"] = []
+	mm_bad.start_mission(bad_data2, [])
+	_check(rejected_1 and mm_bad.state == MissionManager.State.READY,
+		"missing extraction or objectives reject the mission (no false success)")
+	mm_bad.queue_free()
+
+	# H44/H45 are covered by the full suite: all previous sections plus
+	# this one run against the final tree; the pipeline check runs after.
+
+	m5.queue_free()
+	await _frames(6)
+	_check(StealthSystem.light_count() == 0,
+		"final mission fixture tears down cleanly")
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)
@@ -678,6 +1010,32 @@ func _ready() -> void:
 
 ## Instantiates a standalone enemy fixture: standing patrol (single point),
 ## explicit facing, fast decisions, given a player reference.
+## World centers of every marker cell of [param tile] in scan order.
+func _all_marker_centers(rows: Array, tile: String) -> Array[Vector2]:
+	var result: Array[Vector2] = []
+	for y in range(rows.size()):
+		var row := rows[y] as String
+		var x: int = row.find(tile)
+		while x >= 0:
+			result.append(Vector2(x + 0.5, y + 0.5) * 48.0)
+			x = row.find(tile, x + 1)
+	return result
+
+
+## Fixture enemy owned by a live main scene (registered in its enemy list
+## so the mission manager accounts for it).
+func _mk_main_enemy(m: Node, at: Vector2, face: Vector2) -> CharacterBody2D:
+	var enemy: CharacterBody2D = (load("res://scenes/enemy.tscn") as PackedScene).instantiate()
+	m.add_child(enemy)
+	enemy.position = at
+	enemy.set_player(m.player)
+	enemy.set_patrol_route([at])
+	enemy.ai_interval = 0.05
+	enemy.facing = face
+	m.enemies.append(enemy)
+	return enemy
+
+
 ## Expected world center of the first marker cell in a grid.
 func _marker_center(rows: Array, tile: String) -> Vector2:
 	for y in range(rows.size()):

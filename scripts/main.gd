@@ -23,12 +23,13 @@ extends Node2D
 
 const ENEMY_SCENE: PackedScene = preload("res://scenes/enemy.tscn")
 
-const HUD_TEMPLATE := "SHADOW PROTOCOL - Phase 4 build - level: %s
+const HUD_TEMPLATE := "SHADOW PROTOCOL - Phase 5 build - level: %s
 Speed: %s px/s
 Crouch: %s   Sprint: %s
 Noise radius: %s px
 Grid: %s   Lights: %s   Enemies: %s
 Zone: %s
+Mission: %s   Objectives: %d/%d   Extraction: %s
 %s"
 
 var level_data: Dictionary = {}
@@ -37,6 +38,13 @@ var level_label: String = ""
 var enemies: Array[Node] = []
 var _level_lights: Array[Node] = []
 var _status_timer: float = 0.0
+# Phase 5: mission system.
+var mission_manager: MissionManager
+const INTERACTION_RADIUS: float = 80.0
+var interaction_radius: float = INTERACTION_RADIUS  # configurable per level/tests
+var _interact_target: Node = null  # nearest eligible terminal/door (throttled)
+var _interact_search_timer: float = 0.0
+var _hud_action_hint := ""
 
 
 func _ready() -> void:
@@ -47,6 +55,18 @@ func _ready() -> void:
 	touch_layer.interact_pressed.connect(_on_interact)
 	player.interact_requested.connect(_on_interact)
 	player.noise_emitted.connect(_on_player_noise)
+
+	# Phase 5: scene-owned mission coordinator (persists across loads).
+	mission_manager = MissionManager.new()
+	mission_manager.name = "MissionManager"
+	add_child(mission_manager)
+	mission_manager.mission_state_changed.connect(_on_mission_state_changed)
+	mission_manager.mission_rejected.connect(_on_mission_rejected)
+	mission_manager.objective_completed.connect(_on_objective_completed)
+	mission_manager.extraction_availability_changed.connect(_on_extraction_availability)
+	mission_manager.restricted_zone_changed.connect(_on_restricted_zone_changed)
+	mission_manager.mission_succeeded.connect(_on_mission_succeeded)
+	mission_manager.mission_failed.connect(_on_mission_failed)
 
 	await load_level(LevelCatalog.default_descriptor())
 
@@ -84,17 +104,28 @@ func load_level(descriptor: Dictionary) -> void:
 	_spawn_lights(descriptor)
 	_spawn_enemies()
 
-	print("SHADOW PROTOCOL: level '%s' generated (grid %s), player at %s, lights: %d, enemies: %d" % [
+	# Phase 5: fresh mission for the new level. Terminal completion flows
+	# into the mission by stable id; duplicate ids are rejected there.
+	for terminal in level_data["terminals"]:
+		if is_instance_valid(terminal):
+			terminal.completed.connect(mission_manager.on_terminal_completed)
+	mission_manager.start_mission(level_data, level_data.get("zones", []))
+	_interact_search_timer = 0.0
+	_find_interact_target(true)
+
+	print("SHADOW PROTOCOL: level '%s' generated (grid %s), player at %s, lights: %d, enemies: %d, mission: %d objective(s)" % [
 		level_label, level_data["grid_size"], level_data["spawn"],
-		StealthSystem.light_count(), enemies.size()
+		StealthSystem.light_count(), enemies.size(),
+		mission_manager.objectives_total()
 	])
 
 
 ## Tears down the current level: enemies, lights and door registrations
 ## are removed before the next build; the player instance is reused.
 func _clear_level() -> void:
-	for enemy: Node in enemies:
-		enemy.queue_free()
+	for enemy in enemies:
+		if is_instance_valid(enemy):
+			enemy.queue_free()
 	enemies.clear()
 	for light: Node in _level_lights:
 		light.queue_free()
@@ -218,6 +249,19 @@ func _process(delta: float) -> void:
 	)
 	player.set_visibility(visibility)
 	meter.set_value(visibility)
+
+	# Phase 5: mission logic + throttled interaction-target search (the
+	# full search is not needed every frame).
+	mission_manager.update(delta, player.global_position, enemies,
+		level_data.get("zones", []), level_data["cell_size"], level_data["origin"])
+	_interact_search_timer -= delta
+	if _interact_search_timer <= 0.0:
+		_interact_search_timer = 0.25
+		_find_interact_target(true)
+	if Input.is_action_just_pressed("interact"):
+		_on_interact()  # keyboard path shares the touch interaction handler
+	if Input.is_action_just_pressed("restart"):
+		restart_mission()
 	_update_hud()
 	if _status_timer > 0.0:
 		_status_timer -= delta
@@ -230,6 +274,9 @@ func _update_hud() -> void:
 		level_data.get("zones", []), player.global_position,
 		level_data["cell_size"], level_data["origin"]
 	)
+	var state_names := {MissionManager.State.READY: "READY",
+		MissionManager.State.ACTIVE: "ACTIVE", MissionManager.State.SUCCEEDED: "SUCCEEDED",
+		MissionManager.State.FAILED: "FAILED"}
 	hud.text = HUD_TEMPLATE % [
 		level_label,
 		"%.0f" % player.velocity.length(),
@@ -240,21 +287,135 @@ func _update_hud() -> void:
 		"%d" % StealthSystem.light_count(),
 		"%d" % enemies.size(),
 		zone,
-		"WASD move - C crouch - Shift sprint - E interact",
+		state_names[mission_manager.state],
+		mission_manager.objectives_done(),
+		mission_manager.objectives_total(),
+		"available" if mission_manager.extraction_available() else "locked",
+		_hud_action_hint,
 	]
 
 
+## Context-sensitive interaction (Phase 5): the single INTERACT action
+## serves terminals and doors. Targets must be within interaction_radius
+## and reachable by clear line of sight - walls and closed doors block
+## context interaction. One press activates at most the single nearest
+## eligible target (terminals win ties: deterministic).
 func _on_interact() -> void:
-	# Context-sensitive interaction: terminals first, then extraction.
-	for terminal: Vector2 in level_data["terminals"]:
-		if player.global_position.distance_to(terminal) < 60.0:
-			_show_status("Terminal detected. Mission systems arrive in Phase 5.")
-			return
-	var extraction: Vector2 = level_data["extraction"]
-	if player.global_position.distance_to(extraction) < 60.0:
-		_show_status("Extraction point. Mission completion arrives in Phase 5.")
+	var target := _find_interact_target(false)
+	if target == null:
+		_show_status("Nothing to interact with here.")
 		return
-	_show_status("Nothing to interact with here.")
+	if target is Terminal:
+		if target.complete():
+			# Mission progress + feedback flows through the
+			# terminal.completed -> MissionManager.on_terminal_completed path.
+			_show_status("Terminal %s accessed." % target.terminal_id)
+		return
+	if target is Door and not target.is_open:
+		target.set_state(true)
+		_show_status("Door opened.")
+
+
+## Finds the nearest eligible interaction target. Terminals: state
+## AVAILABLE, within radius, clear LOS. Doors: closed, within radius,
+## clear LOS to just short of the door body. Returns null if none.
+## Deterministic ordering: distance, then terminals before doors.
+func _find_interact_target(update_hint: bool) -> Node:
+	var best: Node = null
+	var best_dist: float = -1.0
+	var best_rank: int = 2
+	if level_data.is_empty():
+		return null
+	for terminal in level_data["terminals"]:
+		if not is_instance_valid(terminal) or not (terminal is Terminal) or terminal.is_completed():
+			continue
+		var d: float = player.global_position.distance_to(terminal.global_position)
+		if d > interaction_radius:
+			continue
+		if not _los_clear_to(terminal.global_position, 0.0):
+			continue
+		if best == null or d < best_dist - 0.01 or (absf(d - best_dist) <= 0.01 and 1 < best_rank):
+			best = terminal
+			best_dist = d
+			best_rank = 1
+	for door in level_data.get("doors", []):
+		if not is_instance_valid(door) or not (door is Door) or door.is_open:
+			continue
+		var dd: float = player.global_position.distance_to(door.global_position)
+		if dd > interaction_radius:
+			continue
+		if not _los_clear_to(door.global_position, 30.0):
+			continue
+		if best == null or dd < best_dist - 0.01 or (absf(dd - best_dist) <= 0.01 and 2 < best_rank):
+			best = door
+			best_dist = dd
+			best_rank = 2
+	if update_hint:
+		if best is Terminal:
+			_hud_action_hint = "[E] Access terminal %s" % (best as Terminal).terminal_id
+		elif best is Door:
+			_hud_action_hint = "[E] Open door"
+		else:
+			_hud_action_hint = ""
+	return best
+
+
+## Physics line-of-sight check from the player to a target. Walls and
+## closed doors block. [param stop_short] shortens the ray for door
+## targets so the door's own body does not block its own interaction.
+func _los_clear_to(target_pos: Vector2, stop_short: float) -> bool:
+	var player_body := player as CollisionObject2D
+	if player_body == null:
+		return false
+	var space := get_world_2d().direct_space_state
+	var direction: Vector2 = (target_pos - player.global_position).normalized()
+	var end: Vector2 = target_pos - direction * stop_short
+	var exclude: Array[RID] = [player_body.get_rid()]
+	var query := PhysicsRayQueryParameters2D.create(player.global_position, end, 1, exclude)
+	query.collide_with_areas = false
+	query.hit_from_inside = false
+	var hit: Dictionary = space.intersect_ray(query)
+	return hit.is_empty()
+
+
+## Mission restart / replay: the Phase 4 level lifecycle rebuilds walls,
+## doors (closed), terminals (AVAILABLE), enemies, lights and the
+## player position, then a fresh mission starts. The selected layout
+## descriptor is preserved; call load_level() with a different descriptor
+## to start a distinct new mission on a new map.
+func restart_mission() -> void:
+	await load_level(current_descriptor)
+	_show_status("Mission restarted.")
+
+
+func _on_mission_state_changed(_from_state: int, _to_state: int) -> void:
+	pass
+
+
+func _on_mission_rejected(reason: String) -> void:
+	_show_status("Mission rejected: %s" % reason)
+
+
+func _on_objective_completed(_terminal_id: StringName) -> void:
+	pass  # progress feedback arrives via the next HUD update
+
+
+func _on_extraction_availability(available: bool) -> void:
+	if available:
+		_show_status("All objectives complete. Extraction unlocked.")
+
+
+func _on_restricted_zone_changed(zone_id: StringName) -> void:
+	if zone_id != &"":
+		_show_status("RESTRICTED ZONE - detection pressure doubled while detected here.")
+
+
+func _on_mission_succeeded() -> void:
+	_show_status("MISSION ACCOMPLISHED - press R to restart.")
+
+
+func _on_mission_failed(reason: String) -> void:
+	_show_status("MISSION FAILED (%s) - press R to restart." % reason)
 
 
 ## Player noise -> StealthSystem publication (with movement-state metadata).
@@ -265,8 +426,9 @@ func _on_player_noise(pos: Vector2, radius: float) -> void:
 ## Door state changes: patrol-route navigation data stays fresh - enemy
 ## routes are rebuilt so open doors become usable and closed ones avoided.
 func _on_door_state_changed(is_open: bool) -> void:
-	for enemy: Node in enemies:
-		enemy.set_patrol_route(_build_patrol_route(enemy.global_position))
+	for enemy in enemies:
+		if is_instance_valid(enemy):
+			enemy.set_patrol_route(_build_patrol_route(enemy.global_position))
 
 
 ## Future-HUD hook: state transitions surface as status feedback.

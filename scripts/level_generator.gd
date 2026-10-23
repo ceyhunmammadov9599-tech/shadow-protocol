@@ -25,7 +25,7 @@ var grid_size: Vector2i = Vector2i.ZERO
 
 
 ## Builds the level described by [param rows] and returns a descriptor:
-##   spawn, terminals (Array), extraction, enemy_spawns (Array),
+##   spawn, terminals (Array of Terminal nodes with stable ids), extraction, enemy_spawns (Array),
 ##   lit_cells (Dictionary of Vector2i), wall_cells (Dictionary of
 ##   Vector2i), bounds (Rect2), grid_size (Vector2i), cell_size (float),
 ##   origin (Vector2), zones (Array, passed through), doors (Array of Door),
@@ -55,8 +55,11 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 
 	var lit_cells: Dictionary = {}
 	var wall_cells: Dictionary = {}
-	var terminals: Array[Vector2] = []
+	var terminals: Array = []  # Terminal nodes, scan order
 	var enemy_spawns: Array[Vector2] = []
+	var terminals_root := Node2D.new()
+	terminals_root.name = "Terminals"
+	add_child(terminals_root)
 	var doors: Array = []
 	var door_cells: Dictionary = {}
 	var doors_root := Node2D.new()
@@ -87,7 +90,11 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 					doors.append(door)
 					door_cells[Vector2i(x, y)] = true
 				"3":
-					terminals.append(_cell_center(x, y))
+					var terminal := Terminal.new()
+					terminal.terminal_id = StringName("terminal_%d" % (terminals.size() + 1))
+					terminal.position = _cell_center(x, y)
+					terminals_root.add_child(terminal)
+					terminals.append(terminal)
 					_draw_marker("Terminal", _cell_center(x, y), 10.0, COLOR_TERMINAL)
 				"4":
 					spawn = _cell_center(x, y)
