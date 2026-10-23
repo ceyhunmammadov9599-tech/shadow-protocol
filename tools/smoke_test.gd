@@ -1822,6 +1822,62 @@ func _ready() -> void:
 		and m_v.get_tree().get_nodes_in_group("main_hud").size() == 0,
 		"no duplicate overlay instances accumulate")
 
+	# Acceptance-audit regression: overlay alignment + status lifecycle.
+	m_v._show_status("Nothing to interact with here.")
+	m_v._on_mission_succeeded()
+	await _frames(4)
+	var vp_m: Vector2 = m_v.get_viewport().get_visible_rect().size
+	var panel_r: Rect2 = (m_v.mission_overlay.get_node("Center/Panel") as Control).get_global_rect()
+	var center_delta: Vector2 = panel_r.get_center() - vp_m / 2.0
+	_check(absf(center_delta.x) < 1.0 and absf(center_delta.y) < 1.0,
+		"success overlay panel centered on the viewport (delta %s)" % center_delta)
+	_check(panel_r.position.x >= 0 and panel_r.position.y >= 0 \
+		and panel_r.end.x <= vp_m.x and panel_r.end.y <= vp_m.y,
+		"success overlay inside safe bounds")
+	var status_before: String = m_v.status.text
+	_check(status_before == "MISSION ACCOMPLISHED - press R to restart.",
+		"stale contextual message replaced by mission result status")
+	m_v._show_status("Nothing to interact with here.")
+	_check(m_v.status.text == status_before,
+		"contextual feedback suppressed while result overlay is showing")
+	await m_v.restart_mission()
+	await _frames(6)
+	m_v._on_mission_failed(&"spotted")
+	await _frames(4)
+	panel_r = (m_v.mission_overlay.get_node("Center/Panel") as Control).get_global_rect()
+	center_delta = panel_r.get_center() - vp_m / 2.0
+	_check(absf(center_delta.x) < 1.0 and absf(center_delta.y) < 1.0,
+		"failure overlay panel centered on the viewport (delta %s)" % center_delta)
+	_check(m_v.status.text == "MISSION FAILED (spotted) - press R to restart.",
+		"failure mission status written before overlay gate engages")
+	m_v._show_status("RESTRICTED ZONE - detection pressure doubled while detected here.")
+	_check(m_v.status.text == "MISSION FAILED (spotted) - press R to restart.",
+		"zone notice suppressed while result overlay is showing")
+	await m_v.restart_mission()
+	await _frames(6)
+	_check(m_v.status.text == "Mission restarted." and not m_v.mission_overlay.is_showing(),
+		"restart clears the end state and reactivates contextual feedback")
+	m_v._show_status("Door opened.")
+	_check(m_v.status.text == "Door opened.",
+		"contextual feedback functional again during an active mission")
+	# Five landscape sizes: overlay stays centered and inside bounds.
+	var panel_c: Control = m_v.mission_overlay.get_node("Center/Panel")
+	for res in [Vector2(960, 540), Vector2(1280, 576), Vector2(1280, 720), Vector2(1600, 900), Vector2(2340, 1080)]:
+		m_v.get_window().size = res
+		await _frames(4)
+		m_v._on_mission_succeeded()
+		await _frames(4)
+		var vp_r: Vector2 = m_v.get_viewport().get_visible_rect().size
+		var pr_r: Rect2 = panel_c.get_global_rect()
+		var d_r: Vector2 = pr_r.get_center() - vp_r / 2.0
+		_check(absf(d_r.x) < 1.0 and absf(d_r.y) < 1.0 and pr_r.position.x >= 0 \
+			and pr_r.position.y >= 0 and pr_r.end.x <= vp_r.x and pr_r.end.y <= vp_r.y,
+			"overlay centered and inside bounds at %dx%d" % [vp_r.x, vp_r.y])
+		await m_v.restart_mission()
+		await _frames(4)
+	m_v.get_window().size = Vector2(1280, 576)
+	await _frames(4)
+
 	m_v.queue_free()
 	await _frames(10)
 	_check(StealthSystem.light_count() == 0, "visual fixture tears down cleanly")

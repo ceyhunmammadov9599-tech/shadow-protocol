@@ -33,7 +33,11 @@ func _ready() -> void:
 	panel.name = "Panel"
 	panel.color = COLOR_PANEL
 	panel.size = PANEL_SIZE
-	panel.position = Vector2(-PANEL_SIZE.x / 2.0, -PANEL_SIZE.y / 2.0)
+	# NOTE: "Center" is already offset by -PANEL_SIZE/2 relative to the
+	# center anchor; the panel must sit at the CENTER's origin. Setting a
+	# second -PANEL_SIZE/2 offset here shifted the panel 210 px left and
+	# 75 px up of the true viewport center (acceptance audit finding).
+	panel.position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var center := Control.new()
 	center.name = "Center"

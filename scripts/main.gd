@@ -595,5 +595,14 @@ func _on_enemy_state(from_state: StringName, to_state: StringName) -> void:
 
 
 func _show_status(message: String) -> void:
+	# Mission end states own the HUD: while the mission result overlay
+	# is on screen, leftover contextual feedback ("Nothing to interact
+	# with here.", zone notices, detection pings) is suppressed so it can
+	# never appear next to the MISSION COMPLETE / FAILED panel. Mission
+	# result lines are written before the overlay becomes visible, so
+	# they are unaffected. Feedback stays fully functional during active
+	# missions (acceptance audit finding).
+	if mission_overlay != null and mission_overlay.is_showing():
+		return
 	status.text = message
 	_status_timer = 2.5
