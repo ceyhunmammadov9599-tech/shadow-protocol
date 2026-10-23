@@ -36,6 +36,10 @@ signal objective_progress_changed(done_count: int, total_count: int)
 signal objective_completed(terminal_id: StringName)
 signal extraction_availability_changed(available: bool)
 signal restricted_zone_changed(zone_id: StringName)
+## Edge-triggered detection-pressure warnings: level 0 = confirmed
+## visual contact onset, level 1 = contact reached half the grace
+## period (critical). Never emitted per frame.
+signal detection_warning(level: int)
 signal mission_succeeded()
 signal mission_failed(reason: String)
 
@@ -55,6 +59,8 @@ var _required: Array[StringName] = []
 var _completed: Dictionary = {}  # terminal_id -> true
 var _extraction_available: bool = false
 var _invalid_reason: String = ""
+var _warned_detected: bool = false
+var _warned_critical: bool = false
 
 
 ## Starts (or restarts) a mission from level data. Resets everything:
@@ -69,6 +75,8 @@ func start_mission(level_data: Dictionary, zones: Array) -> void:
 	_extraction_available = false
 	_invalid_reason = ""
 	detection_timer = 0.0
+	_warned_detected = false
+	_warned_critical = false
 	current_zone = &""
 	mission_active_layout_label = str(level_data.get("label", ""))
 
@@ -148,8 +156,16 @@ func update(delta: float, player_pos: Vector2, enemies: Array, zones: Array, cel
 	if genuinely_seen:
 		var rate: float = RESTRICTED_ZONE_RATE if current_zone != &"" else 1.0
 		detection_timer += delta * rate
+		if not _warned_detected:
+			_warned_detected = true
+			detection_warning.emit(0)
+		if detection_timer >= detection_grace * 0.5 and not _warned_critical:
+			_warned_critical = true
+			detection_warning.emit(1)
 	else:
 		detection_timer = 0.0  # documented rule: full reset when contact ends
+		_warned_detected = false
+		_warned_critical = false
 	if detection_timer >= detection_grace:
 		_fail(&"detected")
 		return
@@ -159,6 +175,13 @@ func update(delta: float, player_pos: Vector2, enemies: Array, zones: Array, cel
 	if _extraction_available and player_pos.distance_to(extraction_position) <= EXTRACTION_RADIUS:
 		_set_state(State.SUCCEEDED)
 		mission_succeeded.emit()
+
+
+## Detection timer relative to the grace period (0..1), for HUD use.
+func detection_ratio() -> float:
+	if detection_grace <= 0.0:
+		return 0.0
+	return clampf(detection_timer / detection_grace, 0.0, 1.0)
 
 
 func _fail(reason: StringName) -> void:

@@ -20,17 +20,15 @@ extends Node2D
 @onready var hud: Label = $UI/HUD
 @onready var status: Label = $UI/Status
 @onready var meter: Control = $UI/VisibilityMeter
+@onready var detection_meter: Control = $UI/DetectionMeter
 
 const ENEMY_SCENE: PackedScene = preload("res://scenes/enemy.tscn")
 
-const HUD_TEMPLATE := "SHADOW PROTOCOL - Phase 5 build - level: %s
-Speed: %s px/s
-Crouch: %s   Sprint: %s
-Noise radius: %s px
-Grid: %s   Lights: %s   Enemies: %s
-Zone: %s
-Mission: %s   Objectives: %d/%d   Extraction: %s
-%s"
+const HUD_TEMPLATE := "SHADOW PROTOCOL - %s
+Mission %s   Obj %d/%d   Extract %s
+Zone %s
+%s
+C crouch  Shift sprint  E use  R restart"
 
 var level_data: Dictionary = {}
 var current_descriptor: Dictionary = {}
@@ -40,6 +38,7 @@ var _level_lights: Array[Node] = []
 var _status_timer: float = 0.0
 # Phase 5: mission system.
 var mission_manager: MissionManager
+var feedback_manager: FeedbackManager
 const INTERACTION_RADIUS: float = 80.0
 var interaction_radius: float = INTERACTION_RADIUS  # configurable per level/tests
 var _interact_target: Node = null  # nearest eligible terminal/door (throttled)
@@ -56,6 +55,12 @@ func _ready() -> void:
 	player.interact_requested.connect(_on_interact)
 	player.noise_emitted.connect(_on_player_noise)
 
+	# Phase 6: audio/haptic feedback layer (scene-owned, persists across
+	# loads and restarts; single playback owner per event).
+	feedback_manager = FeedbackManager.new()
+	feedback_manager.name = "FeedbackManager"
+	add_child(feedback_manager)
+
 	# Phase 5: scene-owned mission coordinator (persists across loads).
 	mission_manager = MissionManager.new()
 	mission_manager.name = "MissionManager"
@@ -67,6 +72,12 @@ func _ready() -> void:
 	mission_manager.restricted_zone_changed.connect(_on_restricted_zone_changed)
 	mission_manager.mission_succeeded.connect(_on_mission_succeeded)
 	mission_manager.mission_failed.connect(_on_mission_failed)
+	mission_manager.detection_warning.connect(_on_detection_warning)
+
+	# Gameplay events -> feedback (single subscription each; restarts
+	# never duplicate these connections because the managers persist).
+	mission_manager.objective_completed.connect(
+		func(_id): feedback_manager.play_event(&"terminal"); feedback_manager.request_haptic(80))
 
 	await load_level(LevelCatalog.default_descriptor())
 
@@ -87,14 +98,29 @@ func load_level(descriptor: Dictionary) -> void:
 		level_data["wall_cells"]
 	)
 
-	# Camera confined to the generated map.
+	# Camera confined to the generated map. Axis limits are applied only
+	# when the map is at least viewport-sized on that axis - smaller maps
+	# keep the engine default (effectively unlimited), which avoids
+	# invalid/inverted limits while keeping the map fully visible.
 	var camera: Camera2D = player.camera
 	var bounds: Rect2 = level_data["bounds"]
-	camera.limit_left = 0
-	camera.limit_top = 0
-	camera.limit_right = int(bounds.size.x)
-	camera.limit_bottom = int(bounds.size.y)
+	var viewport: Vector2 = get_viewport_rect().size
+	if bounds.size.x >= viewport.x:
+		camera.limit_left = 0
+		camera.limit_right = int(bounds.size.x)
+	else:
+		camera.limit_left = -1000000
+		camera.limit_right = 1000000
+	if bounds.size.y >= viewport.y:
+		camera.limit_top = 0
+		camera.limit_bottom = int(bounds.size.y)
+	else:
+		camera.limit_top = -1000000
+		camera.limit_bottom = 1000000
 	camera.make_current()
+	# Snap the smoothed view to the (possibly teleported) player so the
+	# mission never starts with the player off-screen.
+	camera.reset_smoothing()
 
 	# Doors: registered so is_cell_blocked() tracks their live state.
 	for door: Node in level_data["doors"]:
@@ -254,6 +280,17 @@ func _process(delta: float) -> void:
 	# full search is not needed every frame).
 	mission_manager.update(delta, player.global_position, enemies,
 		level_data.get("zones", []), level_data["cell_size"], level_data["origin"])
+	# Phase 6: detection danger reads the REAL mission timer; ordinary
+	# suspicion (enemy investigating noise) is shown separately and
+	# never as confirmed detection.
+	detection_meter.set_value(mission_manager.detection_ratio())
+	var suspected: bool = false
+	for enemy in enemies:
+		if is_instance_valid(enemy) and (enemy is Enemy) \
+		and (enemy.state == &"suspicious" or enemy.state == &"investigating"):
+			suspected = true
+			break
+	detection_meter.set_suspected(suspected)
 	_interact_search_timer -= delta
 	if _interact_search_timer <= 0.0:
 		_interact_search_timer = 0.25
@@ -279,18 +316,11 @@ func _update_hud() -> void:
 		MissionManager.State.FAILED: "FAILED"}
 	hud.text = HUD_TEMPLATE % [
 		level_label,
-		"%.0f" % player.velocity.length(),
-		"yes" if player.crouching else "no",
-		"yes" if player.sprinting else "no",
-		"%.0f" % StealthSystem.noise_radius(player.crouching, player.speed_ratio, player.sprinting),
-		"%s" % [level_data["grid_size"]],
-		"%d" % StealthSystem.light_count(),
-		"%d" % enemies.size(),
-		zone,
 		state_names[mission_manager.state],
 		mission_manager.objectives_done(),
 		mission_manager.objectives_total(),
 		"available" if mission_manager.extraction_available() else "locked",
+		zone,
 		_hud_action_hint,
 	]
 
@@ -313,6 +343,8 @@ func _on_interact() -> void:
 		return
 	if target is Door and not target.is_open:
 		target.set_state(true)
+		feedback_manager.play_event(&"door")
+		feedback_manager.request_haptic(50)
 		_show_status("Door opened.")
 
 
@@ -385,6 +417,9 @@ func _los_clear_to(target_pos: Vector2, stop_short: float) -> bool:
 ## to start a distinct new mission on a new map.
 func restart_mission() -> void:
 	await load_level(current_descriptor)
+	_hud_action_hint = ""
+	detection_meter.set_value(0.0)
+	detection_meter.set_suspected(false)
 	_show_status("Mission restarted.")
 
 
@@ -412,10 +447,21 @@ func _on_restricted_zone_changed(zone_id: StringName) -> void:
 
 func _on_mission_succeeded() -> void:
 	_show_status("MISSION ACCOMPLISHED - press R to restart.")
+	feedback_manager.play_event(&"success")
+	feedback_manager.request_haptic(250)
 
 
 func _on_mission_failed(reason: String) -> void:
 	_show_status("MISSION FAILED (%s) - press R to restart." % reason)
+	feedback_manager.play_event(&"failure")
+	feedback_manager.request_haptic(300)
+
+
+## Confirmed-contact onset (0) and critical pressure (1): edge-triggered
+## by the mission manager, so warning audio never plays every frame.
+func _on_detection_warning(level: int) -> void:
+	feedback_manager.play_event(&"warning")
+	feedback_manager.request_haptic(150 if level == 1 else 100)
 
 
 ## Player noise -> StealthSystem publication (with movement-state metadata).

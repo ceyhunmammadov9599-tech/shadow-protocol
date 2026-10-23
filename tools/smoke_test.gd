@@ -1000,6 +1000,321 @@ func _ready() -> void:
 	_check(StealthSystem.light_count() == 0,
 		"final mission fixture tears down cleanly")
 
+	# ================= I. Mobile polish (Phase 6) =================
+	# --- P6-T1: camera smoothing and bounds ---
+	var noise_base6: int = StealthSystem.noise_emitted.get_connections().size()
+	var m6: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(m6)
+	await _frames(12)
+	var pl: CharacterBody2D = m6.player
+	var cam: Camera2D = pl.camera
+	_check(cam.position_smoothing_enabled and absf(cam.position_smoothing_speed
+		- pl.CAMERA_SMOOTHING_SPEED) < TOL,
+		"camera smoothing enabled with configurable speed")
+	_check(cam.global_position == Vector2(72.0, 72.0),
+		"camera initializes exactly at the player spawn (no drift)")
+	# Limit rule mirrored against the ACTUAL runtime viewport (headless
+	# viewport size differs from the design size; the rule is what counts).
+	var vp6: Vector2 = m6.get_viewport_rect().size
+	var limits_ok: bool = true
+	if 1344 >= vp6.x:
+		limits_ok = limits_ok and cam.limit_left == 0 and cam.limit_right == 1344
+	else:
+		limits_ok = limits_ok and cam.limit_right >= 1000000 - 1
+	if 768 >= vp6.y:
+		limits_ok = limits_ok and cam.limit_top == 0 and cam.limit_bottom == 768
+	else:
+		limits_ok = limits_ok and cam.limit_bottom >= 1000000 - 1
+	_check(limits_ok, "camera limits follow the map-bounds rule for the runtime viewport")
+
+	# Smooth follow: teleport, convergence without overshoot.
+	pl.global_position = Vector2(600.0, 400.0)
+	var prev_dist: float = cam.global_position.distance_to(pl.global_position)
+	var overshoot: bool = false
+	for _i in range(30):
+		await _frames(1)
+		var d_now: float = cam.global_position.distance_to(pl.global_position)
+		if d_now > prev_dist + 0.5:
+			overshoot = true
+		prev_dist = d_now
+	_check(prev_dist < 60.0 and not overshoot,
+		"camera converges smoothly toward the player without overshoot (%.1f px left)" % prev_dist)
+
+	# Stationary stability.
+	await _frames(20)
+	var cam_pos_a: Vector2 = cam.global_position
+	await _frames(20)
+	_check(cam.global_position == cam_pos_a,
+		"camera is perfectly stable while the player is stationary")
+
+	# Bounds at the map corner: the camera still tracks the player and the
+	# limits form a valid clamp window. (View-space clamping itself is
+	# applied by the renderer at draw time - a device-level concern that
+	# cannot be asserted headless; the limit rule is verified instead.)
+	pl.global_position = Vector2(48.0, 48.0)
+	cam.reset_smoothing()
+	await _frames(2)
+	_check(cam.global_position == pl.global_position
+		and (cam.limit_right - cam.limit_left) >= int(vp6.x)
+		and (cam.limit_bottom - cam.limit_top) >= int(vp6.y),
+		"camera tracks the player at the corner with a valid clamp window")
+
+	# Small map: no inverted limits.
+	var small_rows: Array[String] = []
+	small_rows.resize(6)
+	for y in range(6):
+		small_rows[y] = "20000000200000002"
+	small_rows[1] = "20400000200000002"
+	small_rows[2] = "20003000200000002"
+	small_rows[3] = "20000000200000502"
+	small_rows[4] = "20000000200000002"
+	small_rows[5] = "20000000600000002"
+	var small_desc: Dictionary = {"label": "small", "rows": small_rows, "zones": []}
+	await m6.load_level(small_desc)
+	await _frames(4)
+	var cam_small: Camera2D = (m6.player as CharacterBody2D).camera
+	_check(cam_small.limit_left < cam_small.limit_right and cam_small.limit_top < cam_small.limit_bottom
+		and cam_small.limit_right >= 1000000 - 1,
+		"small map keeps camera limits valid (unlimited, not inverted)")
+	_check(cam_small.global_position == (m6.player as CharacterBody2D).global_position,
+		"camera snaps to the player on small-map load")
+
+	# Restart and level-switch camera reset.
+	await m6.load_level(LevelCatalog.default_descriptor())
+	await _frames(4)
+	_check((m6.player as CharacterBody2D).camera.global_position == Vector2(72.0, 72.0),
+		"camera resets to spawn on level switch / restart")
+
+	# Freed-player safety: camera is the player's child, so it dies with
+	# it - no stale reference can survive (verified on a lone instance).
+	var pl_lone: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(pl_lone)
+	var cam_lone: Camera2D = pl_lone.camera
+	pl_lone.queue_free()
+	await _frames(3)
+	_check(not is_instance_valid(cam_lone),
+		"freeing the player frees its camera (no stale references)")
+
+	# --- P6-T1: animation states ---
+	var st_events: Array = []
+	(m6.player as CharacterBody2D).movement_state_changed.connect(
+		func(new_st, _old): st_events.append(new_st))
+	_check((m6.player as CharacterBody2D).movement_visual_state
+		== Player.MovementVisualState.IDLE,
+		"player starts in IDLE visual state")
+	Input.action_press("move_right")
+	await _frames(12)
+	_check((m6.player as CharacterBody2D).movement_visual_state
+		== Player.MovementVisualState.WALK,
+		"IDLE -> WALK transition on real movement")
+	Input.action_press("sprint")
+	await _frames(8)
+	_check((m6.player as CharacterBody2D).movement_visual_state
+		== Player.MovementVisualState.SPRINT,
+		"WALK -> SPRINT transition on genuine sprint")
+	Input.action_release("sprint")
+	Input.action_press("crouch")
+	await _frames(8)
+	_check((m6.player as CharacterBody2D).movement_visual_state
+		== Player.MovementVisualState.CROUCH,
+		"WALK -> CROUCH transition reflects the real crouch state")
+	Input.action_release("move_right")
+	Input.action_release("crouch")
+	await _frames(25)
+	_check((m6.player as CharacterBody2D).movement_visual_state
+		== Player.MovementVisualState.IDLE,
+		"reliable return to IDLE after input release")
+	_check(st_events.size() == 5,
+		"every transition emits exactly one signal; residual-speed CROUCH->WALK->IDLE is genuine (%d events)" % st_events.size())
+	Input.action_press("move_left")
+	await _frames(6)
+	_check((m6.player as CharacterBody2D).facing.x < 0.0,
+		"facing direction follows movement coherently")
+	Input.action_release("move_left")
+	await _frames(6)
+	Input.action_press("move_right")
+	await _frames(6)
+	Input.action_release("move_right")
+	_check((m6.player as CharacterBody2D).facing == Vector2(1.0, 0.0),
+		"keyboard and touch share one facing rule (axis-coherent)")
+
+	# --- P6-T2: feedback layer ---
+	var fm: FeedbackManager = m6.feedback_manager
+	var audio_ev: Array = []
+	var haptic_ev: Array = []
+	fm.audio_played.connect(func(e): audio_ev.append(e))
+	fm.haptic_event.connect(func(ms): haptic_ev.append(ms))
+	_check(fm.get_child_count() == 5,
+		"feedback manager owns one audio player per event type")
+
+	# Event routing through real gameplay (terminal on the legacy map).
+	await m6.restart_mission()
+	await _frames(4)
+	(m6.player as CharacterBody2D).global_position = Vector2(1224.0, 120.0)
+	await _frames(2)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(audio_ev.count(&"terminal") == 1 and haptic_ev.size() == 1,
+		"terminal completion routes one audio event and one haptic request")
+
+	# Door event.
+	await m6.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(4)
+	(m6.player as CharacterBody2D).global_position = Vector2(600.0, 216.0)
+	m6.interaction_radius = 320.0
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	_check(audio_ev.count(&"door") == 1,
+		"door interaction routes a door audio event")
+
+	# Warning cooldown: two rapid warning onsets -> one playback.
+	fm._warning_cooldown_left = 0.0
+	fm._haptic_cooldown_left = 0.0
+	_check(fm.play_event(&"warning") and not fm.play_event(&"warning"),
+		"warning audio obeys its cooldown (no per-frame repetition)")
+	_check(audio_ev.count(&"warning") == 1,
+		"duplicate warning requests do not double-play")
+
+	# Mute suppresses playback.
+	fm.muted = true
+	var audio_before_mute: int = audio_ev.size()
+	_check(not fm.play_event(&"success") and audio_ev.size() == audio_before_mute,
+		"mute suppresses playback requests")
+	fm.muted = false
+
+	# Success/failure events through real mission outcomes (legacy layout,
+	# default grace restored after the failure-probe section).
+	await m6.load_level(LevelCatalog.default_descriptor())
+	m6.mission_manager.detection_grace = 3.0
+	await _frames(4)
+	(m6.player as CharacterBody2D).global_position = Vector2(1224.0, 120.0)
+	await _frames(2)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	(m6.player as CharacterBody2D).global_position = Vector2(1128.0, 600.0)
+	await _frames(4)
+	_check(audio_ev.count(&"success") == 1,
+		"mission success routes the success audio event")
+	# Failure event via genuine detection.
+	var m6_mm: MissionManager = m6.mission_manager
+	m6_mm.detection_grace = 0.3
+	await m6.restart_mission()
+	await _frames(4)
+	_mk_main_enemy(m6, Vector2(72.0, 168.0), Vector2(0, -1))
+	await _frames(40)
+	_check(m6_mm.state == MissionManager.State.FAILED and audio_ev.count(&"failure") == 1,
+		"mission failure routes the failure audio event")
+	_check(audio_ev.count(&"warning") >= 1 and audio_ev.count(&"warning") <= 2,
+		"sustained detection triggers at most onset+critical warnings (%d)" % audio_ev.count(&"warning"))
+
+	# Haptic configuration and cooldown.
+	fm.haptics_enabled = false
+	fm._haptic_cooldown_left = 0.0
+	var haptic_before_disable: int = haptic_ev.size()
+	_check(not fm.request_haptic(100) and haptic_ev.size() == haptic_before_disable,
+		"disabled haptics suppress requests")
+	fm.haptics_enabled = true
+	fm._haptic_cooldown_left = 0.0
+	var haptic_before: int = haptic_ev.size()
+	_check(fm.request_haptic(100) and not fm.request_haptic(100)
+		and haptic_ev.size() == haptic_before + 1,
+		"haptic requests obey the cooldown and rate limit")
+
+	# Restart: no accumulated listeners, feedback survives.
+	var audio_conns: int = fm.audio_played.get_connections().size()
+	var obj_conns: int = m6_mm.objective_completed.get_connections().size()
+	await m6.restart_mission()
+	await _frames(4)
+	_check(fm.audio_played.get_connections().size() == audio_conns
+		and m6_mm.objective_completed.get_connections().size() == obj_conns
+		and fm.get_child_count() == 5,
+		"restart leaks no feedback listeners or audio players")
+
+	# Old mission events cannot update the new mission HUD.
+	m6_mm.on_terminal_completed(&"ghost_terminal")
+	_check(m6_mm.objectives_done() == 0
+		and m6.mission_manager.state == MissionManager.State.ACTIVE,
+		"stale mission events cannot corrupt the restarted mission")
+
+	# --- P6-T2: detection meter truth ---
+	await m6.restart_mission()
+	m6_mm.detection_grace = 3.0
+	await _frames(4)
+	var dm: DetectionMeter = m6.get_node("UI/DetectionMeter")
+	_check(dm.target == 0.0 and not dm.suspected,
+		"detection meter starts clear on a fresh mission")
+	var e6_det: CharacterBody2D = _mk_main_enemy(m6, Vector2(72.0, 168.0), Vector2(0, -1))
+	await _frames(25)
+	_check(m6_mm.state == MissionManager.State.ACTIVE,
+		"detection probe stays inside the grace period (meter semantics)")
+	var ratio_mid: float = m6_mm.detection_ratio()
+	_check(ratio_mid > 0.0 and absf(dm.target - ratio_mid) < 0.02,
+		"detection meter tracks the real mission timer ratio (%.2f)" % dm.target)
+	(m6.player as CharacterBody2D).global_position = Vector2(1500.0, 1500.0)
+	await _frames(8)
+	_check(dm.target == 0.0 and m6_mm.detection_timer == 0.0,
+		"breaking line of sight clears the detection danger immediately")
+
+	# Suspicion (noise) never reads as confirmed detection: a fresh enemy
+	# facing away, noise only - no visual contact ever happens.
+	await m6.restart_mission()
+	await _frames(4)
+	var e6_noise: CharacterBody2D = _mk_main_enemy(m6, Vector2(72.0, 168.0), Vector2(0, 1))
+	(m6.player as CharacterBody2D).global_position = Vector2(72.0, 72.0)
+	await _frames(2)
+	StealthSystem.publish_noise(Vector2(300.0, 168.0), 300.0, &"player", &"walk")
+	await _frames(30)
+	_check(dm.target == 0.0 and dm.suspected,
+		"suspicion shows as a subtle hint, never as confirmed detection")
+
+	# --- P6-T2: responsive HUD layout at multiple viewport sizes ---
+	# Headless limitation: the window is virtual; Control rectangles are
+	# real computed layout. Safe-area insets are NOT modeled here
+	# (device-only) - documented limitation, not a device claim.
+	var touch6: Control = m6.get_node("UI/TouchLayer")
+	var hud6: Control = m6.get_node("UI/HUD")
+	var meter6: Control = m6.get_node("UI/VisibilityMeter")
+	var status6: Control = m6.get_node("UI/Status")
+	var all_clear := true
+	var detail := ""
+	for probe_size: Vector2 in [Vector2(1280, 720), Vector2(1920, 1080), Vector2(960, 540)]:
+		var vp_probe: SubViewport = SubViewport.new()
+		vp_probe.size = probe_size
+		add_child(vp_probe)
+		var m7: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+		vp_probe.add_child(m7)
+		await _frames(6)
+		var touch_p: Control = m7.get_node("UI/TouchLayer")
+		var joy_rect: Rect2 = touch_p.joystick_reserved_rect()
+		var btn_rect: Rect2 = touch_p.buttons_reserved_rect()
+		var ui_nodes: Array[Control] = [m7.get_node("UI/HUD"), m7.get_node("UI/VisibilityMeter"),
+			m7.get_node("UI/DetectionMeter"), m7.get_node("UI/Status")]
+		for ui_node: Control in ui_nodes:
+			var r: Rect2 = ui_node.get_global_rect()
+			if r.intersects(joy_rect) or r.intersects(btn_rect) or not (Rect2(Vector2.ZERO, probe_size)).encloses(r):
+				all_clear = false
+				detail = "%s at %s" % [ui_node.name, probe_size]
+		m7.queue_free()
+		vp_probe.queue_free()
+		await _frames(2)
+	_check(all_clear, "HUD stays clear of touch regions inside every tested viewport" + (" (%s)" % detail if detail != "" else ""))
+	_check(hud6.text.contains("Obj") and hud6.text.contains("Extract")
+		and hud6.text.contains("Zone"),
+		"HUD keeps objectives, extraction and zone visible")
+	_check(hud6.text.count("\n") == 4 and hud6.text.length() < 200,
+		"permanent HUD text stays compact (%d lines)" % [hud6.text.count("\n") + 1])
+
+	# Teardown cleanliness.
+	m6.queue_free()
+	await _frames(6)
+	_check(StealthSystem.light_count() == 0
+		and StealthSystem.noise_emitted.get_connections().size() == noise_base6,
+		"polish fixture tears down without leaking lights, noise or feedback listeners")
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)

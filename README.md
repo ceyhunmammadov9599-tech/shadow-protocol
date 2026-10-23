@@ -9,6 +9,29 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
+Phase 6 (mobile gameplay polish) - complete at headless-verification
+level:
+
+- Camera: built-in Camera2D position smoothing (configurable speed),
+  per-axis map-bounds limits only when the map is viewport-sized or
+  larger (small maps keep valid defaults), reset_smoothing() on every
+  level load/restart so the view never starts away from the player;
+  camera is the player's child (no stale references)
+- Visible movement states IDLE/WALK/SPRINT/CROUCH from the real
+  crouch/velocity/sprint values (one signal per transition, no
+  near-zero flicker); procedural bob/tint/scale presentation with no
+  collision or speed changes; shared keyboard/touch animation path
+- Responsive HUD: compact anchored mission HUD, visibility meter
+  (exposure) and detection meter (confirmed-contact risk) kept
+  DISTINCT; suspicion is a subtle hint, never an alarm; touch
+  reserved regions (joystick, buttons) are formalized and asserted
+  clear at three representative landscape sizes
+- FeedbackManager: five code-synthesized audio tones (terminal, door,
+  warning with 2 s cooldown, success, failure), single playback owner
+  per event, mute switch; haptics separated from hardware with config
+  + cooldown guards (vibration only attempted on real mobile
+  platforms, never headless)
+
 Phase 5 (mission gameplay) - complete at headless-verification level:
 
 - Interactive terminals (scripts/terminal.gd): spawned from grid

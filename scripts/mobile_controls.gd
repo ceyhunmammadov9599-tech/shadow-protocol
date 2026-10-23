@@ -37,6 +37,18 @@ var _crouch_active: bool = false
 var _sprint_active: bool = false
 
 
+## Reserved gameplay region of the floating joystick (left 45% of the
+## screen, below mid-height where thumbs operate it). HUD must stay
+## out of this rectangle. Shared truth for layout and layout tests.
+func joystick_reserved_rect() -> Rect2:
+	var screen: Vector2 = get_viewport_rect().size
+	return Rect2(Vector2(0.0, screen.y * 0.45), Vector2(screen.x * 0.45, screen.y * 0.55))
+
+## Reserved region of the action buttons (bottom-right cluster).
+func buttons_reserved_rect() -> Rect2:
+	var screen: Vector2 = get_viewport_rect().size
+	return Rect2(screen - Vector2(340.0, 340.0), Vector2(340.0, 340.0))
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	anchors_preset = Control.PRESET_FULL_RECT

@@ -1,9 +1,10 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/level_generator.gd" id="2_level"]
 [ext_resource type="Script" path="res://scripts/mobile_controls.gd" id="3_touch"]
 [ext_resource type="Script" path="res://scripts/visibility_meter.gd" id="5_meter"]
+[ext_resource type="Script" path="res://scripts/detection_meter.gd" id="6_detection"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="4_player"]
 
 [node name="Main" type="Node2D"]
@@ -37,19 +38,31 @@ offset_bottom = 36.0
 grow_horizontal = 2
 script = ExtResource("5_meter")
 
+[node name="DetectionMeter" type="Control" parent="UI"]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -120.0
+offset_top = 46.0
+offset_right = 120.0
+offset_bottom = 68.0
+grow_horizontal = 2
+script = ExtResource("6_detection")
+
 [node name="HUD" type="Label" parent="UI"]
 offset_left = 16.0
 offset_top = 16.0
-offset_right = 620.0
-offset_bottom = 160.0
+offset_right = 344.0
+offset_bottom = 110.0
+theme_override_font_sizes/font = 14
 
 [node name="Status" type="Label" parent="UI"]
 anchors_preset = 7
 anchor_left = 0.5
 anchor_right = 0.5
 offset_left = -320.0
-offset_top = 80.0
+offset_top = 120.0
 offset_right = 320.0
-offset_bottom = 120.0
+offset_bottom = 160.0
 grow_horizontal = 2
 horizontal_alignment = 1

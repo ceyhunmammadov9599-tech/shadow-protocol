@@ -1,3 +1,4 @@
+class_name Player
 extends CharacterBody2D
 ## Shadow Protocol - player controller.
 ##
@@ -8,6 +9,7 @@ extends CharacterBody2D
 signal noise_emitted(pos: Vector2, radius: float)
 signal visibility_updated(value: float)
 signal interact_requested()
+signal movement_state_changed(new_state: int, old_state: int)
 
 ## Movement tuning (pixels per second).
 const WALK_SPEED: float = 240.0
@@ -39,6 +41,26 @@ var _noise_timer: float = 0.0
 
 const COLOR_STANDING := Color(0.24, 0.78, 0.85)
 const COLOR_CROUCHED := Color(0.16, 0.52, 0.58)
+const COLOR_SPRINT := Color(0.45, 0.95, 1.0)
+
+## Phase 6: visible movement states (procedural presentation - no
+## external animation assets, collision geometry and speeds untouched).
+enum MovementVisualState { IDLE, WALK, SPRINT, CROUCH }
+
+## Speed above which movement counts as WALK/SPRINT (hysteresis floor:
+## near-zero velocities stay IDLE, so transitions cannot flicker).
+const VISUAL_STATE_MIN_SPEED: float = 15.0
+## Camera smoothing: built-in Camera2D position smoothing (no redundant
+## custom interpolation); speed is configurable here.
+const CAMERA_SMOOTHING_SPEED: float = 6.0
+
+## Current visible state (IDLE/WALK/SPRINT/CROUCH), driven by the real
+## movement/crouch values every physics frame.
+var movement_visual_state: int = MovementVisualState.IDLE
+## Last non-zero movement direction (coherent facing for the visual).
+var facing: Vector2 = Vector2(1.0, 0.0)
+## Animation phase for the procedural walk/sprint bob.
+var _bob_phase: float = 0.0
 
 
 func _ready() -> void:
@@ -46,6 +68,11 @@ func _ready() -> void:
 	# usable in isolation (unit scenes, future test harnesses).
 	if visual == null:
 		push_warning("player.gd: Visual node missing")
+	# Phase 6: camera smoothing is owned by the built-in Camera2D
+	# feature; configuration lives here so it stays tunable in one place.
+	if camera != null:
+		camera.position_smoothing_enabled = true
+		camera.position_smoothing_speed = CAMERA_SMOOTHING_SPEED
 
 
 func set_touch_controls(controls: Control) -> void:
@@ -78,7 +105,7 @@ func _physics_process(delta: float) -> void:
 
 	speed_ratio = clampf(velocity.length() / (WALK_SPEED * SPRINT_MULTIPLIER), 0.0, 1.0)
 	_update_noise(delta)
-	_update_visual_state()
+	_update_visual_state(delta)
 
 
 ## Touch joystick first (when present and active), keyboard action map as
@@ -133,9 +160,47 @@ func request_interact() -> void:
 	interact_requested.emit()
 
 
-func _update_visual_state() -> void:
+## Recomputes the visible movement state from the REAL values (crouch
+## flag, actual velocity, sprint flag). Called every physics frame with
+## the frame delta so keyboard and touchscreen movement share one
+## animation path. State changes emit movement_state_changed exactly
+## once per transition.
+func _update_visual_state(delta: float) -> void:
 	if visual == null:
 		return
+	# Facing: only update on genuine directional input, so the visual
+	# keeps a coherent direction while decelerating.
+	if move_input.length_squared() > 0.01:
+		facing = move_input.normalized()
+
+	# State machine: crouch wins, then actual speed floor, then sprint.
+	var new_state: int = MovementVisualState.IDLE
+	if crouching:
+		new_state = MovementVisualState.CROUCH
+	elif velocity.length() > VISUAL_STATE_MIN_SPEED:
+		new_state = MovementVisualState.SPRINT if sprinting else MovementVisualState.WALK
+	if new_state != movement_visual_state:
+		var old_state: int = movement_visual_state
+		movement_visual_state = new_state
+		movement_state_changed.emit(new_state, old_state)
+
+	# Procedural presentation: bob while moving (scaled by real speed),
+	# crouch scale, sprint tint. Never touches collision or speed.
+	var moving: bool = movement_visual_state == MovementVisualState.WALK \
+		or movement_visual_state == MovementVisualState.SPRINT
+	if moving:
+		var bob_frequency: float = 9.0 if sprinting else 6.5
+		_bob_phase += delta * bob_frequency * clampf(speed_ratio * 1.6, 0.3, 1.0)
+	else:
+		_bob_phase = 0.0
+	var bob: float = sin(_bob_phase) * (2.0 if sprinting else 1.2) * (1.0 if moving else 0.0)
+	visual.position = Vector2(0.0, -absf(bob))
 	var target_scale: float = 0.75 if crouching else 1.0
-	visual.scale = visual.scale.lerp(Vector2.ONE * target_scale, 0.2)
-	visual.color = COLOR_CROUCHED if crouching else COLOR_STANDING
+	var flip: float = -1.0 if facing.x < 0.0 else 1.0
+	visual.scale = visual.scale.lerp(Vector2(flip, 1.0) * target_scale, 0.25)
+	var target_color: Color = COLOR_STANDING
+	if crouching:
+		target_color = COLOR_CROUCHED
+	elif movement_visual_state == MovementVisualState.SPRINT:
+		target_color = COLOR_SPRINT
+	visual.color = target_color
