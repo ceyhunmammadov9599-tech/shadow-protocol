@@ -1013,19 +1013,19 @@ func _ready() -> void:
 		"camera smoothing enabled with configurable speed")
 	_check(cam.global_position == Vector2(72.0, 72.0),
 		"camera initializes exactly at the player spawn (no drift)")
-	# Limit rule mirrored against the ACTUAL runtime viewport (headless
-	# viewport size differs from the design size; the rule is what counts).
+	# Corrective iteration (layout remediation): the limit rule is the
+	# framing contract compute_camera_limits() defines, mirrored against
+	# the ACTUAL runtime viewport (headless viewport differs from design
+	# size; the rule is what counts). Maps smaller than the view now lock
+	# the camera to the map center instead of the old unlimited fallback
+	# that exposed a 45% background band at 1280x576.
 	var vp6: Vector2 = m6.get_viewport_rect().size
-	var limits_ok: bool = true
-	if 1344 >= vp6.x:
-		limits_ok = limits_ok and cam.limit_left == 0 and cam.limit_right == 1344
-	else:
-		limits_ok = limits_ok and cam.limit_right >= 1000000 - 1
-	if 768 >= vp6.y:
-		limits_ok = limits_ok and cam.limit_top == 0 and cam.limit_bottom == 768
-	else:
-		limits_ok = limits_ok and cam.limit_bottom >= 1000000 - 1
-	_check(limits_ok, "camera limits follow the map-bounds rule for the runtime viewport")
+	var limits_expected6 := Main.compute_camera_limits(Rect2(0, 0, 1344, 768), vp6)
+	var limits_ok: bool = cam.limit_left == limits_expected6["left"] \
+		and cam.limit_right == limits_expected6["right"] \
+		and cam.limit_top == limits_expected6["top"] \
+		and cam.limit_bottom == limits_expected6["bottom"]
+	_check(limits_ok, "camera limits follow the framing contract for the runtime viewport")
 
 	# Smooth follow: teleport, convergence without overshoot.
 	pl.global_position = Vector2(600.0, 400.0)
@@ -1073,9 +1073,12 @@ func _ready() -> void:
 	await m6.load_level(small_desc)
 	await _frames(4)
 	var cam_small: Camera2D = (m6.player as CharacterBody2D).camera
-	_check(cam_small.limit_left < cam_small.limit_right and cam_small.limit_top < cam_small.limit_bottom
-		and cam_small.limit_right >= 1000000 - 1,
-		"small map keeps camera limits valid (unlimited, not inverted)")
+	var small_expected := Main.compute_camera_limits(m6.level_data["bounds"], vp6)
+	_check(cam_small.limit_left == small_expected["left"]
+		and cam_small.limit_right == small_expected["right"]
+		and cam_small.limit_top == small_expected["top"]
+		and cam_small.limit_bottom == small_expected["bottom"],
+		"small map locks the camera to the map center (valid, not inverted)")
 	_check(cam_small.global_position == (m6.player as CharacterBody2D).global_position,
 		"camera snaps to the player on small-map load")
 
@@ -1478,6 +1481,160 @@ func _ready() -> void:
 	await _frames(30)
 	_check(Enemy.bench_decision_ticks == k_ticks_before,
 		"disabled benchmark counters add zero per-frame work")
+
+
+	# ================= L. Layout remediation (camera framing, backdrop,
+	# responsive HUD, touch visibility) - corrective iteration =================
+	# Pure framing-limits contract (small maps center, large maps clamp,
+	# per axis, offset bounds, ranges never smaller than the view).
+	var l_small := Main.compute_camera_limits(Rect2(0, 0, 400, 300), Vector2(1600, 720))
+	_check(l_small["right"] - l_small["left"] == 1600
+		and l_small["bottom"] - l_small["top"] == 720,
+		"small-map framing keeps a full-viewport limit range")
+	_check(l_small["left"] == -600 and l_small["top"] == -210,
+		"small-map framing centers the map on screen")
+	var l_large := Main.compute_camera_limits(Rect2(0, 0, 2000, 1000), Vector2(1280, 720))
+	_check(l_large["left"] == 0 and l_large["right"] == 2000
+		and l_large["top"] == 0 and l_large["bottom"] == 1000,
+		"large-map framing clamps to the map edges")
+	var l_mixed := Main.compute_camera_limits(Rect2(0, 0, 1000, 900), Vector2(1280, 720))
+	_check(l_mixed["right"] - l_mixed["left"] == 1280 and l_mixed["top"] == 0
+		and l_mixed["bottom"] == 900,
+		"mixed-size map frames per axis (small x centered, tall y clamped)")
+	var l_offset := Main.compute_camera_limits(Rect2(50, 60, 400, 300), Vector2(1280, 720))
+	_check(l_offset["right"] == l_offset["left"] + 1280 and l_offset["top"] == -150
+		and l_offset["bottom"] == 570,
+		"offset bounds still frame relative to their own rect")
+
+	# Live scene: framing applied at boot, camera inside limits, player visible.
+	var l_m: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(l_m)
+	await _frames(4)
+	var l_cam: Camera2D = l_m.get_node("Player/Camera2D")
+	var l_bounds: Rect2 = l_m.level_data["bounds"]
+	var l_vp: Vector2 = l_m.get_viewport_rect().size
+	var l_expected := Main.compute_camera_limits(l_bounds, l_vp)
+	_check(l_cam.limit_left == l_expected["left"] and l_cam.limit_right == l_expected["right"]
+		and l_cam.limit_top == l_expected["top"] and l_cam.limit_bottom == l_expected["bottom"],
+		"boot applies the framing limits for the live viewport")
+	var l_center := l_cam.get_screen_center_position()
+	_check(l_center.x >= l_expected["left"] + l_vp.x * 0.5 - 1.0
+		and l_center.x <= l_expected["right"] - l_vp.x * 0.5 + 1.0
+		and l_center.y >= l_expected["top"] + l_vp.y * 0.5 - 1.0
+		and l_center.y <= l_expected["bottom"] - l_vp.y * 0.5 + 1.0,
+		"camera center stays inside the framing limits")
+	_check(Rect2(l_center - l_vp * 0.5, l_vp).has_point(l_m.player.global_position),
+		"player is on screen at spawn")
+	# The 1280x576 defect class: a 1600x720 canvas over a 1344-wide map must
+	# keep the whole map width visible (centered framing, not free camera).
+	var l_wide := Main.compute_camera_limits(Rect2(0, 0, 1344, 768), Vector2(1600, 720))
+	_check(Rect2(Vector2(l_wide["left"], l_wide["top"]), Vector2(1600, 720))
+		.intersection(Rect2(0, 0, 1344, 768)).size == Vector2(1344, 720),
+		"wide-canvas framing keeps the entire map width visible")
+
+	# Backdrop and boundary frame (intentional composition beyond bounds).
+	var l_level: Node2D = l_m.get_node("LevelRoot")
+	var l_backdrop: Node = l_level.get_node_or_null("Backdrop")
+	_check(l_backdrop != null and l_backdrop.get_index() == 0,
+		"site backdrop is drawn behind the level")
+	if l_backdrop:
+		var l_poly: PackedVector2Array = (l_backdrop as Polygon2D).polygon
+		_check(l_poly[0] == Vector2(-640, -640)
+			and l_poly[2] == l_bounds.size + Vector2(640, 640),
+			"backdrop extends past the bounds on every side")
+	var l_frame: Line2D = l_level.get_node_or_null("BoundsFrame") as Line2D
+	_check(l_frame != null and l_frame.closed and l_frame.points.size() == 4
+		and l_frame.points[0] == Vector2.ZERO and l_frame.points[2] == l_bounds.size,
+		"boundary frame outlines the exact playable bounds")
+
+	# HUD typography, screen-space placement and touch-region exclusion.
+	var l_hud: Label = l_m.get_node("UI/HUD")
+	_check(l_hud.get_theme_font_size("font") >= 16,
+		"HUD font is at least 16 px (readable in landscape)")
+	var l_hud_rect: Rect2 = l_hud.get_global_rect()
+	_check(Rect2(Vector2.ZERO, l_vp).encloses(l_hud_rect),
+		"HUD stays inside the viewport")
+	var l_touch: Control = l_m.get_node("UI/TouchLayer")
+	var l_btns: Dictionary = l_touch.get("_buttons")
+	var l_hud_clear := true
+	for b in l_btns.values():
+		var c: Vector2 = b["center"]
+		var r: float = b["radius"]
+		if Rect2(c - Vector2(r, r), Vector2(r * 2.0, r * 2.0)).intersects(l_hud_rect):
+			l_hud_clear = false
+	_check(l_hud_clear, "HUD never overlaps the touch action buttons")
+
+	# HUD content contract: zone state is never an empty label, help matches
+	# the input mode, objective/extraction data stays bound.
+	var l_lines: PackedStringArray = l_hud.text.split("\n")
+	_check(l_lines.size() == 5 and l_lines[2].begins_with("Zone ")
+		and l_lines[2].length() > 7,
+		"zone line always carries state (no empty Zone label)")
+	_check(l_lines[2].contains("unrestricted"),
+		"spawn outside restricted zones reports unrestricted")
+	_check(l_lines[4].contains("crouch"),
+		"controls help line is present for the active input mode")
+	_check(l_lines[1].contains("Obj 0/") and l_lines[1].contains("Extract"),
+		"objective and extraction data stay bound at mission start")
+
+	# Touch visibility rules: hidden without a touchscreen, forced by the
+	# explicit touch_debug setting, with matching help text.
+	_check(not l_touch.visible,
+		"touch overlay hidden on non-touch headless (correct detection)")
+	ProjectSettings.set_setting("shadow_protocol/touch_debug", true)
+	var l_m2: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(l_m2)
+	await _frames(4)
+	_check((l_m2.get_node("UI/TouchLayer") as Control).visible,
+		"touch_debug setting forces the overlay for desktop testing")
+	_check((l_m2.get_node("UI/HUD") as Label).text.contains("Touch:"),
+		"touch mode shows touch help text instead of keyboard keys")
+	l_m2.queue_free()
+	ProjectSettings.set_setting("shadow_protocol/touch_debug", false)
+	await _frames(4)
+
+	# Camera stability across restart and level switching.
+	var l_center_before: Vector2 = l_center
+	await l_m.restart_mission()
+	await _frames(4)
+	_check(l_center_before.distance_to(l_cam.get_screen_center_position()) < 1.0,
+		"no camera jump after restart")
+	await l_m.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(4)
+	var l_expected_b := Main.compute_camera_limits(
+		l_m.level_data["bounds"], l_m.get_viewport_rect().size)
+	_check(l_cam.limit_left == l_expected_b["left"]
+		and l_cam.limit_right == l_expected_b["right"]
+		and l_cam.limit_top == l_expected_b["top"]
+		and l_cam.limit_bottom == l_expected_b["bottom"],
+		"level switch recomputes framing limits for the new map")
+	var l_vp_b: Vector2 = l_m.get_viewport_rect().size
+	_check(Rect2(l_cam.get_screen_center_position() - l_vp_b * 0.5, l_vp_b)
+		.has_point(l_m.player.global_position),
+		"player visible on screen right after a level switch")
+
+	# Landscape invariants: for every tested window size the expand-mode
+	# canvas keeps valid, never-inverted framing limits.
+	var l_sizes := [Vector2(960, 540), Vector2(1280, 720), Vector2(1600, 900),
+		Vector2(2340, 1080), Vector2(1280, 576)]
+	var l_canvas_ok := true
+	for win: Vector2 in l_sizes:
+		var scale: float = minf(win.x / 1280.0, win.y / 720.0)
+		var canvas := win / scale
+		var lim := Main.compute_camera_limits(Rect2(0, 0, 1344, 768), canvas)
+		if lim["right"] - lim["left"] < canvas.x - 0.5 \
+		or lim["bottom"] - lim["top"] < canvas.y - 0.5:
+			l_canvas_ok = false
+		if lim["right"] < lim["left"] or lim["bottom"] < lim["top"]:
+			l_canvas_ok = false
+	_check(l_canvas_ok,
+		"framing limits stay valid for every tested landscape canvas")
+
+	# Teardown cleanliness.
+	l_m.queue_free()
+	await _frames(6)
+	_check(StealthSystem.light_count() == 0,
+		"layout fixture tears down cleanly")
 
 	k_m.queue_free()
 	await _frames(6)

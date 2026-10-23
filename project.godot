@@ -20,6 +20,7 @@ StealthSystem="*res://scripts/stealth_system.gd"
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/handheld/orientation=4
+shadow_protocol/touch_debug=false
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 

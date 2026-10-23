@@ -39,7 +39,7 @@ const HUD_TEMPLATE := "SHADOW PROTOCOL - %s
 Mission %s   Obj %d/%d   Extract %s
 Zone %s
 %s
-C crouch  Shift sprint  E use  R restart"
+%s"
 
 var level_data: Dictionary = {}
 var current_descriptor: Dictionary = {}
@@ -55,6 +55,9 @@ var interaction_radius: float = INTERACTION_RADIUS  # configurable per level/tes
 var _interact_target: Node = null  # nearest eligible terminal/door (throttled)
 var _interact_search_timer: float = 0.0
 var _hud_action_hint := ""
+# Corrective iteration (layout remediation): the help line matches the
+# active input mode instead of always showing desktop keys on touch.
+var _controls_line := ""
 
 
 func _ready() -> void:
@@ -65,6 +68,9 @@ func _ready() -> void:
 	touch_layer.interact_pressed.connect(_on_interact)
 	player.interact_requested.connect(_on_interact)
 	player.noise_emitted.connect(_on_player_noise)
+	_controls_line = "Touch: left thumb moves - CRCH / SPRNT / ACT buttons" \
+		if touch_layer.visible \
+		else "C crouch  Shift sprint  E use  R restart"
 
 	# Phase 6: audio/haptic feedback layer (scene-owned, persists across
 	# loads and restarts; single playback owner per event).
@@ -95,6 +101,31 @@ func _ready() -> void:
 
 ## Loads (or switches to) the level described by [param descriptor].
 ## Safe to call repeatedly: the previous level is torn down first.
+## Deterministic screen-space framing limits for a map rect against a
+## view size. Per axis: map >= view -> clamp to the map edges (camera
+## scrolls inside the map); map < view -> lock the camera to the map's
+## center so the whole map stays composed on screen. Limits never invert
+## and the range is always >= the view on each axis.
+static func compute_camera_limits(bounds: Rect2, viewport: Vector2) -> Dictionary:
+	var left: int
+	var right: int
+	if bounds.size.x >= viewport.x:
+		left = int(bounds.position.x)
+		right = int(bounds.position.x + bounds.size.x)
+	else:
+		left = int(round(bounds.get_center().x - viewport.x * 0.5))
+		right = left + int(round(viewport.x))
+	var top: int
+	var bottom: int
+	if bounds.size.y >= viewport.y:
+		top = int(bounds.position.y)
+		bottom = int(bounds.position.y + bounds.size.y)
+	else:
+		top = int(round(bounds.get_center().y - viewport.y * 0.5))
+		bottom = top + int(round(viewport.y))
+	return {"left": left, "right": right, "top": top, "bottom": bottom}
+
+
 func load_level(descriptor: Dictionary) -> void:
 	await _clear_level()
 
@@ -109,25 +140,21 @@ func load_level(descriptor: Dictionary) -> void:
 		level_data["wall_cells"]
 	)
 
-	# Camera confined to the generated map. Axis limits are applied only
-	# when the map is at least viewport-sized on that axis - smaller maps
-	# keep the engine default (effectively unlimited), which avoids
-	# invalid/inverted limits while keeping the map fully visible.
+	# Corrective iteration (layout remediation): per-axis framing limits.
+	# Maps smaller than the view on an axis now LOCK the camera to the
+	# map's center (composed framing), instead of the old unlimited limits
+	# that let the camera follow the player past the map edge and expose
+	# a raw-background band (45% of the screen at 1280x576). Maps at least
+	# view-sized clamp to the map edges exactly as before. Recomputed per
+	# load; reset_smoothing() below prevents any start-of-mission jump.
 	var camera: Camera2D = player.camera
 	var bounds: Rect2 = level_data["bounds"]
 	var viewport: Vector2 = get_viewport_rect().size
-	if bounds.size.x >= viewport.x:
-		camera.limit_left = 0
-		camera.limit_right = int(bounds.size.x)
-	else:
-		camera.limit_left = -1000000
-		camera.limit_right = 1000000
-	if bounds.size.y >= viewport.y:
-		camera.limit_top = 0
-		camera.limit_bottom = int(bounds.size.y)
-	else:
-		camera.limit_top = -1000000
-		camera.limit_bottom = 1000000
+	var limits := compute_camera_limits(bounds, viewport)
+	camera.limit_left = limits["left"]
+	camera.limit_right = limits["right"]
+	camera.limit_top = limits["top"]
+	camera.limit_bottom = limits["bottom"]
 	camera.make_current()
 	# Snap the smoothed view to the (possibly teleported) player so the
 	# mission never starts with the player off-screen.
@@ -356,6 +383,9 @@ func _update_hud() -> void:
 	_hud_cache["extract"] = extract_now
 	_hud_cache["zone"] = zone
 	_hud_cache["hint"] = _hud_action_hint
+	# Corrective iteration (layout remediation): "Zone" never renders as an
+	# empty label; outside every restricted zone it states the actual state.
+	var zone_text := "none (unrestricted)" if zone == &"" else str(zone)
 	var state_names := {MissionManager.State.READY: "READY",
 		MissionManager.State.ACTIVE: "ACTIVE", MissionManager.State.SUCCEEDED: "SUCCEEDED",
 		MissionManager.State.FAILED: "FAILED"}
@@ -365,8 +395,9 @@ func _update_hud() -> void:
 		mission_manager.objectives_done(),
 		mission_manager.objectives_total(),
 		"available" if extract_now else "locked",
-		zone,
+		zone_text,
 		_hud_action_hint,
+		_controls_line,
 	]
 	if bench_enabled:
 		bench_hud_rebuilds += 1

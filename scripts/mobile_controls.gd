@@ -53,7 +53,12 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	anchors_preset = Control.PRESET_FULL_RECT
 	# Only show the touch overlay on real touch devices (Android, touchscreens).
-	visible = DisplayServer.is_touchscreen_available() or OS.has_feature("android")
+	# The explicit touch_debug project setting (shadow_protocol/touch_debug,
+	# default false) forces the overlay for desktop layout testing; it is
+	# read once here so toggling it takes effect on the next scene load.
+	visible = DisplayServer.is_touchscreen_available() \
+		or OS.has_feature("android") \
+		or ProjectSettings.get_setting("shadow_protocol/touch_debug", false)
 	_layout_buttons()
 	get_viewport().size_changed.connect(_layout_buttons)
 

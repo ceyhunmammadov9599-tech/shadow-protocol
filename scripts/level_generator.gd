@@ -14,6 +14,10 @@ extends Node2D
 const CELL_SIZE: float = 48.0
 
 const COLOR_MAP := Color(0.07, 0.09, 0.12)
+# Corrective iteration (layout remediation): backdrop + boundary frame.
+const COLOR_BACKDROP := Color(0.04, 0.05, 0.08)
+const COLOR_FRAME := Color(0.17, 0.20, 0.26)
+const BACKDROP_MARGIN := 640.0
 const COLOR_LIT := Color(0.99, 0.86, 0.55, 0.16)
 const COLOR_WALL := Color(0.17, 0.20, 0.26)
 const COLOR_WALL_EDGE := Color(0.10, 0.12, 0.16)
@@ -44,7 +48,35 @@ func generate(rows: Array, zones: Array = []) -> Dictionary:
 
 	var map_rect: Rect2 = Rect2(0, 0, width * CELL_SIZE, height * CELL_SIZE)
 
-	# Single dark floor polygon under everything.
+	# Corrective iteration (layout remediation): a coherent "site grounds"
+	# backdrop drawn under everything. When the view is wider than the map
+	# (small maps, ultra-wide aspect ratios) the camera locks to the map's
+	# center and this backdrop - instead of the raw clear color - fills the
+	# exposed margin, so the composition reads as intentional.
+	var backdrop := Polygon2D.new()
+	backdrop.name = "Backdrop"
+	var m: float = BACKDROP_MARGIN
+	backdrop.polygon = PackedVector2Array(
+		[Vector2(-m, -m), Vector2(map_rect.size.x + m, -m),
+		 map_rect.size + Vector2(m, m), Vector2(-m, map_rect.size.y + m)]
+	)
+	backdrop.color = COLOR_BACKDROP
+	add_child(backdrop)
+
+	# Facility boundary frame: a thin closed outline exactly on the map
+	# edge so the playable site reads as a bounded structure.
+	var frame := Line2D.new()
+	frame.name = "BoundsFrame"
+	frame.width = 2.0
+	frame.closed = true
+	frame.default_color = COLOR_FRAME
+	frame.points = PackedVector2Array(
+		[Vector2.ZERO, Vector2(map_rect.size.x, 0), map_rect.size,
+		 Vector2(0, map_rect.size.y)]
+	)
+	add_child(frame)
+
+	# Single dark floor polygon under everything else.
 	var floor_poly := Polygon2D.new()
 	floor_poly.name = "Floor"
 	floor_poly.polygon = PackedVector2Array(

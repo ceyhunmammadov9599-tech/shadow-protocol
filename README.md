@@ -205,6 +205,10 @@ All commands are run from the repository root.
 
 Controls: WASD move, C crouch, Shift sprint, E interact.
 
+Touch-overlay debugging: the on-screen controls appear only on real
+touchscreens/Android; set `shadow_protocol/touch_debug=true` in
+project.godot to force them visible on desktop for layout testing.
+
 ## Engineering notes
 
 - All scenes are text .tscn files and can be reviewed in any diff tool.
