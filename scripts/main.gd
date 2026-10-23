@@ -1,3 +1,4 @@
+class_name Main
 extends Node2D
 ## Shadow Protocol - main scene controller (Phases 1-4).
 ##
@@ -23,6 +24,16 @@ extends Node2D
 @onready var detection_meter: Control = $UI/DetectionMeter
 
 const ENEMY_SCENE: PackedScene = preload("res://scenes/enemy.tscn")
+
+# Phase 7 benchmarking: HUD rebuild counter, enabled only by the
+# benchmark harness. Zero behavior change.
+static var bench_enabled: bool = false
+static var bench_hud_rebuilds: int = 0
+
+
+static func bench_reset() -> void:
+	bench_hud_rebuilds = 0
+
 
 const HUD_TEMPLATE := "SHADOW PROTOCOL - %s
 Mission %s   Obj %d/%d   Extract %s
@@ -121,6 +132,11 @@ func load_level(descriptor: Dictionary) -> void:
 	# Snap the smoothed view to the (possibly teleported) player so the
 	# mission never starts with the player off-screen.
 	camera.reset_smoothing()
+	# Phase 7: cache keys that cannot legally persist across a level
+	# load (state/zone/hint belong to the previous mission).
+	_hud_cache["state"] = -1
+	_hud_cache["zone"] = &""
+	_hud_cache["hint"] = "__invalidate__"
 
 	# Doors: registered so is_cell_blocked() tracks their live state.
 	for door: Node in level_data["doors"]:
@@ -270,11 +286,15 @@ func _process(delta: float) -> void:
 	if level_data.is_empty():
 		return  # async level load has not completed yet
 	# Visibility model update (grid lookup + few-light distance math).
+	# Phase 7 optimization: identical model, but the value is pushed to
+	# the player/meter only when it actually changed - a stationary
+	# player no longer re-emits unchanged signals every idle frame.
 	var visibility: float = StealthSystem.compute_visibility(
 		player.global_position, player.crouching, player.speed_ratio
 	)
-	player.set_visibility(visibility)
-	meter.set_value(visibility)
+	if visibility != player.visibility:
+		player.set_visibility(visibility)
+		meter.set_value(visibility)
 
 	# Phase 5: mission logic + throttled interaction-target search (the
 	# full search is not needed every frame).
@@ -306,11 +326,36 @@ func _process(delta: float) -> void:
 			status.text = ""
 
 
+## Phase 7 optimization: the HUD text is rebuilt only when a tracked
+## value actually changes (level, state, objectives, extraction, zone,
+## hint) instead of every idle frame. Identical output; unchanged
+## steady-state cost is a cheap comparison instead of a full string
+## rebuild. The rebuild counter verifies the reduction.
+var _hud_cache := {"label": "", "state": -1, "done": -1, "total": -1,
+	"extract": false, "zone": &"", "hint": ""}
+
+
 func _update_hud() -> void:
 	var zone: StringName = LevelCatalog.zone_at(
 		level_data.get("zones", []), player.global_position,
 		level_data["cell_size"], level_data["origin"]
 	)
+	var extract_now: bool = mission_manager.extraction_available()
+	if _hud_cache["label"] == level_label \
+	and _hud_cache["state"] == mission_manager.state \
+	and _hud_cache["done"] == mission_manager.objectives_done() \
+	and _hud_cache["total"] == mission_manager.objectives_total() \
+	and _hud_cache["extract"] == extract_now \
+	and _hud_cache["zone"] == zone \
+	and _hud_cache["hint"] == _hud_action_hint:
+		return  # nothing visible changed: skip the rebuild entirely
+	_hud_cache["label"] = level_label
+	_hud_cache["state"] = mission_manager.state
+	_hud_cache["done"] = mission_manager.objectives_done()
+	_hud_cache["total"] = mission_manager.objectives_total()
+	_hud_cache["extract"] = extract_now
+	_hud_cache["zone"] = zone
+	_hud_cache["hint"] = _hud_action_hint
 	var state_names := {MissionManager.State.READY: "READY",
 		MissionManager.State.ACTIVE: "ACTIVE", MissionManager.State.SUCCEEDED: "SUCCEEDED",
 		MissionManager.State.FAILED: "FAILED"}
@@ -319,10 +364,12 @@ func _update_hud() -> void:
 		state_names[mission_manager.state],
 		mission_manager.objectives_done(),
 		mission_manager.objectives_total(),
-		"available" if mission_manager.extraction_available() else "locked",
+		"available" if extract_now else "locked",
 		zone,
 		_hud_action_hint,
 	]
+	if bench_enabled:
+		bench_hud_rebuilds += 1
 
 
 ## Context-sensitive interaction (Phase 5): the single INTERACT action

@@ -139,10 +139,26 @@ func _current_noise_radius() -> float:
 	return NOISE_RADIUS_WALKING * (0.55 + 0.45 * speed_ratio)
 
 
+# Phase 7 benchmarking: pushed-visibility counter, benchmark-only.
+static var bench_enabled: bool = false
+static var bench_visibility_sets: int = 0
+
+
+static func bench_reset() -> void:
+	bench_visibility_sets = 0
+
+
 ## Visibility is computed externally by StealthSystem and pushed in here,
-## keeping the controller decoupled from lighting data.
+## keeping the controller decoupled from lighting data. Phase 7: the
+## signal fires only on genuine value changes (duplicate unchanged
+## pushes were pure waste; no listener depended on them).
 func set_visibility(value: float) -> void:
-	visibility = clampf(value, 0.0, 1.0)
+	value = clampf(value, 0.0, 1.0)
+	if value == visibility:
+		return
+	visibility = value
+	if bench_enabled:
+		bench_visibility_sets += 1
 	visibility_updated.emit(visibility)
 
 

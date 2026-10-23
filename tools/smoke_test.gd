@@ -1315,6 +1315,175 @@ func _ready() -> void:
 		and StealthSystem.noise_emitted.get_connections().size() == noise_base6,
 		"polish fixture tears down without leaking lights, noise or feedback listeners")
 
+	# ================= K. Phase 7 optimization correctness =================
+	# AI decision throttling (Phase 3 architecture) verified with the
+	# benchmark counters, plus regression tests for each Phase 7 change.
+	Enemy.bench_enabled = true
+	Player.bench_enabled = true
+	Main.bench_enabled = true
+	var _ss_bench: GDScript = load("res://scripts/stealth_system.gd")
+	_ss_bench.bench_enabled = true
+
+	var k_m: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(k_m)
+	await _frames(4)
+	await k_m.load_level(LevelCatalog.default_descriptor())
+	await _frames(30)
+
+	# 1) AI ticks respect the configured interval (counter-based). The
+	# benchmark counter is static (sums every enemy), so the level's own
+	# enemies are temporarily silenced (5 s interval: zero ticks in a
+	# 1 s window) and only the fixture is counted.
+	Enemy.bench_reset()
+	var k_level_enemies: Array = (k_m.enemies as Array).duplicate()
+	for level_enemy in k_level_enemies:
+		level_enemy.ai_interval = 5.0
+	var k_e1: CharacterBody2D = _mk_main_enemy(k_m, Vector2(216.0, 264.0), Vector2(1, 0))
+	k_e1.set_patrol_route([Vector2(216.0, 264.0), Vector2(216.0, 312.0)])
+	k_e1.ai_interval = 0.2
+	await _frames(60)  # ~1 s of physics at 60 Hz -> expect ~5 ticks
+	_check(Enemy.bench_decision_ticks >= 3 and Enemy.bench_decision_ticks <= 7,
+		"AI decision ticks respect the configured 0.2 s interval (%d in ~1 s)" % Enemy.bench_decision_ticks)
+
+	# 2) Movement stays per-physics-frame between decision ticks.
+	# A 25-frame window spans at least two decision ticks, so the enemy
+	# provably travels even when captured at a patrol arrival instant.
+	var pos_a: Vector2 = k_e1.global_position
+	await _frames(25)
+	_check(k_e1.global_position.distance_to(pos_a) > 1.0,
+		"enemy movement stays active between decision updates")
+	for level_enemy in k_level_enemies:
+		level_enemy.ai_interval = 0.1
+	k_e1.queue_free()
+	await _frames(2)
+
+	# 3) ALERT chase behavior unchanged after the same-tick vision reuse
+	# (same clear-line-of-sight geometry as the Phase 5 fixtures; the
+	# gain override makes the alert transition deterministic in tests).
+	(k_m.player as CharacterBody2D).global_position = Vector2(72.0, 72.0)
+	var k_e2: CharacterBody2D = _mk_main_enemy(k_m, Vector2(72.0, 168.0), Vector2(0, -1))
+	k_e2.suspicion_gain_per_sec = 8.0
+	await _frames(45)
+	_check(k_e2.state == &"alert"
+		and k_e2.current_target().distance_to(k_m.player.global_position) < 5.0,
+		"ALERT chase behavior preserved with live target tracking (state=%s)" % k_e2.state)
+	await k_m.restart_mission()  # fresh mission for the HUD checks below
+
+	# 4) HUD steady state: zero rebuilds when nothing visible changed.
+	await _frames(12)  # let the post-restart repaint land first
+	Main.bench_reset()
+	await _frames(60)
+	_check(Main.bench_hud_rebuilds == 0,
+		"steady-state HUD performs zero text rebuilds (%d in 60 frames)" % Main.bench_hud_rebuilds)
+
+	# 5) HUD repaints on genuine state changes.
+	(k_m.player as CharacterBody2D).global_position = Vector2(1224.0, 120.0)
+	await _frames(3)
+	Input.action_press("interact")
+	await _frames(3)
+	Input.action_release("interact")
+	await _frames(3)
+	_check(Main.bench_hud_rebuilds >= 1 and (k_m.get_node("UI/HUD") as Label).text.contains("Obj 1/1"),
+		"HUD rebuilds on genuine objective changes and shows progress")
+
+	# 6) Visibility pushes only on change; meter stays exact.
+	var k_p: Player = k_m.player
+	var k_vis_signals: Array = []
+	k_p.visibility_updated.connect(func(_v): k_vis_signals.append(_v))
+	Player.bench_reset()
+	await _frames(30)
+	_check(k_vis_signals.size() == 0,
+		"stationary player emits zero visibility updates (was every frame)")
+	Input.action_press("move_right")
+	await _frames(12)
+	Input.action_release("move_right")
+	_check(k_vis_signals.size() > 0,
+		"moving player still receives live visibility updates")
+	var k_meter: Control = k_m.get_node("UI/VisibilityMeter")
+	var k_expected_vis: float = StealthSystem.compute_visibility(
+		k_p.global_position, k_p.crouching, k_p.speed_ratio)
+	_check(absf(k_meter.target - k_expected_vis) < 0.02,
+		"visibility meter still tracks exact stealth values (%.3f vs %.3f)" % [k_meter.target, k_expected_vis])
+
+	# 7) FeedbackManager idle-processing gate.
+	var k_fm: FeedbackManager = k_m.feedback_manager
+	_check(not k_fm.is_processing(),
+		"feedback layer performs no idle processing when no cooldown is live")
+	k_fm.play_event(&"warning")
+	_check(k_fm.is_processing(),
+		"a live warning cooldown re-enables feedback processing")
+	await _frames(150)  # > 2 s: warning cooldown must have expired
+	_check(not k_fm.is_processing(),
+		"feedback processing disables itself once cooldowns expire")
+
+	# 8) Freed-player AI safety (standalone instance, real scene).
+	var k_lone: CharacterBody2D = (load("res://scenes/enemy.tscn") as PackedScene).instantiate()
+	add_child(k_lone)
+	var k_plone: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(k_plone)
+	k_lone.set_player(k_plone)
+	k_lone.set_patrol_route([Vector2(120.0, 120.0)])
+	k_lone.ai_interval = 0.05
+	k_plone.queue_free()
+	await _frames(12)
+	_check(is_instance_valid(k_lone) and Enemy.bench_decision_ticks > 0,
+		"AI keeps deciding safely after the player reference is freed")
+	k_lone.queue_free()
+
+	# 9) Static light registration unchanged by Phase 7 (they have no
+	# _process: no idle work; architectural no-change finding).
+	_check(StealthSystem.light_count() == 5,
+		"legacy static light registration unchanged by Phase 7")
+
+	# 10) Repeated level loads: node counts stay flat (no accumulation).
+	await k_m.load_level(LevelCatalog.default_descriptor())  # clears fixtures
+	await _frames(6)
+	var nodes_first: int = get_tree().get_node_count()
+	for _cycle in range(4):
+		await k_m.load_level(LevelCatalog.default_descriptor())
+	await _frames(6)
+	var nodes_last: int = get_tree().get_node_count()
+	_check(abs(nodes_last - nodes_first) <= 2,
+		"five load cycles leak no nodes (%d -> %d)" % [nodes_first, nodes_last])
+
+	# 11) Stress scenario: 8 real enemies on a valid authored map.
+	var k_stress_rows: Array[String] = []
+	for y in range(12):
+		var row := ""
+		for x in range(32):
+			row += "2" if x == 0 or x == 31 or y == 0 or y == 11 else "0"
+		k_stress_rows.append(row)
+	var k_stress_spots: Array = [[2, 1, "4"], [5, 2, "3"], [29, 9, "6"],
+		[5, 4, "5"], [5, 8, "5"], [12, 4, "5"], [12, 7, "5"],
+		[19, 3, "5"], [19, 8, "5"], [26, 4, "5"], [26, 7, "5"],
+		[9, 6, "1"], [22, 5, "1"]]
+	for spot in k_stress_spots:
+		var k_row_s: String = k_stress_rows[spot[1]]
+		k_stress_rows[spot[1]] = k_row_s.substr(0, spot[0]) + spot[2] + k_row_s.substr(spot[0] + 1)
+	await k_m.load_level({"label": "stress", "rows": k_stress_rows, "zones": [], "moving_lights": []})
+	await _frames(120)
+	var k_stress_ok: bool = (k_m.enemies as Array).size() == 8
+	for enemy_s in k_m.enemies:
+		if not is_instance_valid(enemy_s) or enemy_s.state != &"patrol":
+			k_stress_ok = false
+	_check(k_stress_ok and k_m.mission_manager.state == MissionManager.State.ACTIVE,
+		"8-enemy stress scenario stays stable and in PATROL (%d enemies)" % (k_m.enemies as Array).size())
+
+	# 12) Benchmark counters are inert when disabled.
+	var k_ticks_before: int = Enemy.bench_decision_ticks
+	Enemy.bench_enabled = false
+	Player.bench_enabled = false
+	Main.bench_enabled = false
+	_ss_bench.bench_enabled = false
+	await _frames(30)
+	_check(Enemy.bench_decision_ticks == k_ticks_before,
+		"disabled benchmark counters add zero per-frame work")
+
+	k_m.queue_free()
+	await _frames(6)
+	_check(StealthSystem.light_count() == 0,
+		"Phase 7 fixture tears down cleanly")
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)

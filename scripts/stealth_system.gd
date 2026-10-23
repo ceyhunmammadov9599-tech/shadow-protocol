@@ -40,6 +40,19 @@ var _last_noise_frame: Dictionary = {}
 
 ## Called by Main once the level has been generated. The optional walls
 ## dictionary enables is_cell_blocked() navigation queries (Phase 4).
+# Phase 7 benchmarking: static counters, enabled only by the benchmark.
+static var bench_enabled: bool = false
+static var bench_visibility_computes: int = 0
+static var bench_noise_dispatches: int = 0
+static var bench_light_queries: int = 0
+
+
+static func bench_reset() -> void:
+	bench_visibility_computes = 0
+	bench_noise_dispatches = 0
+	bench_light_queries = 0
+
+
 func configure(lit: Dictionary, size: float, origin: Vector2, walls: Dictionary = {}) -> void:
 	lit_cells = lit
 	cell_size = maxf(size, 1.0)
@@ -94,6 +107,8 @@ func light_count() -> int:
 ## Additive with a hard clamp at 1.0: overlapping lights combine
 ## predictably and can never push illumination out of range.
 func dynamic_light_at(world_pos: Vector2) -> float:
+	if bench_enabled:
+		bench_light_queries += 1
 	var total: float = 0.0
 	for light: Node in _lights:
 		total += light.contribution_at(world_pos)
@@ -119,6 +134,8 @@ func illumination_at(world_pos: Vector2) -> float:
 ## Motion boost is applied exactly once, after the illumination and
 ## posture factors, and the result is clamped.
 func compute_visibility(world_pos: Vector2, crouching: bool, speed_ratio: float) -> float:
+	if bench_enabled:
+		bench_visibility_computes += 1
 	var value: float = illumination_at(world_pos)
 	if crouching:
 		value *= CROUCH_FACTOR
@@ -143,6 +160,8 @@ func noise_radius(crouching: bool, speed_ratio: float, sprinting: bool = false) 
 ## decoupled and is never modified for consumers).
 func publish_noise(pos: Vector2, radius: float, source_id: StringName,
 		movement_state: StringName = &"walk", extra: Dictionary = {}) -> void:
+	if bench_enabled:
+		bench_noise_dispatches += 1
 	var frame: int = Engine.get_process_frames()
 	if _last_noise_frame.get(source_id, -1) == frame:
 		return  # duplicate within the same frame: drop

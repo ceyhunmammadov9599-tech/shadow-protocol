@@ -63,6 +63,21 @@ const STATE_RETURNING: StringName = &"returning"
 
 # ---- AI scheduling (P3-T4) --------------------------------------------------
 @export_range(0.02, 1.0, 0.01) var ai_interval: float = 0.1
+
+# Phase 7 benchmarking: static counters, enabled only by the benchmark
+# harness. Zero behavior change; increments are plain integer adds.
+static var bench_enabled: bool = false
+static var bench_decision_ticks: int = 0
+static var bench_fov_evals: int = 0
+static var bench_vision_rays: int = 0
+static var bench_noise_reactions: int = 0
+
+
+static func bench_reset() -> void:
+	bench_decision_ticks = 0
+	bench_fov_evals = 0
+	bench_vision_rays = 0
+	bench_noise_reactions = 0
 ## Number of decision ticks executed (test observability for throttling).
 var decision_ticks: int = 0
 
@@ -170,6 +185,8 @@ func detection_strength() -> float:
 		return 0.0
 	var to_player: Vector2 = player.global_position - global_position
 	var dist: float = to_player.length()
+	if bench_enabled:
+		bench_fov_evals += 1
 	if dist > vision_range:
 		return 0.0
 	if dist > 0.001:
@@ -195,6 +212,8 @@ func _obstructed_to_player() -> bool:
 		return false  # no physics body: nothing can obstruct
 	var space := get_world_2d().direct_space_state
 	var exclude: Array[RID] = [get_rid(), player_body.get_rid()]
+	if bench_enabled:
+		bench_vision_rays += 1
 	var query := PhysicsRayQueryParameters2D.create(
 		global_position, player.global_position, 1, exclude)
 	query.hit_from_inside = false
@@ -216,6 +235,8 @@ func _obstructed_to_player() -> bool:
 ##      current one (+ 40 px margin) - weak distant noise never
 ##      interrupts patrol or investigation.
 func _on_noise_event(event: NoiseEvent) -> void:
+	if bench_enabled and state != STATE_ALERT and event.source_id != enemy_id:
+		bench_noise_reactions += 1
 	if state == STATE_ALERT:
 		return
 	if event.source_id == enemy_id:
@@ -268,6 +289,8 @@ func _enter_state(new_state: StringName) -> void:
 ## Decision update, executed only on the throttled AI interval (P3-T4).
 ## dt is the decision interval, not the physics delta.
 func _decide(dt: float) -> void:
+	if bench_enabled:
+		bench_decision_ticks += 1
 	var strength: float = detection_strength()
 	var sees_player: bool = strength > 0.0
 	if sees_player:
@@ -304,7 +327,10 @@ func _decide(dt: float) -> void:
 				_enter_state(STATE_SEARCHING)
 		STATE_ALERT:
 			if is_instance_valid(player):
-				if detection_strength() > 0.0:
+				# Phase 7: reuse the strength already computed at the top
+				# of _decide() this tick - identical value, half the vision
+				# evaluations during active pursuit.
+				if strength > 0.0:
 					_target = player.global_position  # chase live position
 					_state_timer = 0.0  # visible: reset lost-contact timer
 				else:

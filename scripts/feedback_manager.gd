@@ -56,9 +56,19 @@ func _ready() -> void:
 		_players[event] = player
 
 
+## Phase 7 optimization: this node's idle processing is disabled
+## whenever no cooldown is live, so a quiet scene pays zero per-frame
+## cost for the feedback layer. Any new cooldown re-enables it.
 func _process(delta: float) -> void:
 	_warning_cooldown_left = maxf(0.0, _warning_cooldown_left - delta)
 	_haptic_cooldown_left = maxf(0.0, _haptic_cooldown_left - delta)
+	if _warning_cooldown_left == 0.0 and _haptic_cooldown_left == 0.0:
+		set_process(false)
+
+
+func _enable_processing() -> void:
+	if not is_processing():
+		set_process(true)
 
 
 ## Plays the sound for a gameplay event. Returns false when muted or
@@ -71,6 +81,7 @@ func play_event(event: StringName) -> bool:
 		if _warning_cooldown_left > 0.0:
 			return false
 		_warning_cooldown_left = WARNING_COOLDOWN
+		_enable_processing()
 	var player: AudioStreamPlayer = _players[event]
 	player.play()
 	audio_played.emit(event)
@@ -87,6 +98,7 @@ func request_haptic(duration_ms: int) -> bool:
 	if _haptic_cooldown_left > 0.0:
 		return false
 	_haptic_cooldown_left = HAPTIC_COOLDOWN
+	_enable_processing()
 	haptic_event.emit(duration_ms)
 	if OS.has_feature("android") or OS.has_feature("ios"):
 		Input.vibrate_handheld(duration_ms)

@@ -9,8 +9,35 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
-Phase 6 (mobile gameplay polish) - complete at headless-verification
-level:
+Phase 7 (Android optimization) - P7-T1 complete at headless-verification
+level (profiling pass + targeted, behavior-preserving optimizations);
+P7-T2 (stable 60 FPS on mid-range hardware) remains OPEN pending
+real-device evidence:
+
+- Reproducible device-free benchmark: tools/benchmark.tscn runs nine
+  scenario IDs (legacy/layout B/layout C steady, seeded, 8-enemy
+  stress, active detection, movement, restart cycle, door) with
+  warmup, fixed measured windows, 3 repetitions and deterministic
+  operation counters; host wall-clock is reported separately and
+  never claimed as Android performance (headless renderer metrics are
+  unavailable by design)
+- HUD text is rebuilt only when a tracked value changes (zero
+  steady-state rebuilds vs one per idle frame before)
+- Player visibility pushes/emits only on value change; the visibility
+  meter stays exact to StealthSystem.compute_visibility
+- FeedbackManager idle processing is disabled while no feedback
+  cooldown is live
+- ALERT pursuit reuses the same-tick vision result (no duplicate
+  raycast per decision tick)
+- Evidence-based no-change decisions kept the already-correct parts
+  intact: AI decision accumulator throttling, distance->FOV->raycast
+  vision gating, spawn-time patrol BFS, merged wall runs, static
+  lights without _process, and the per-frame genuinely-seen mission
+  loop (changing its cadence would alter detection-timing semantics)
+- Regression suite: 214/214 checks pass (197 historical + 17 new
+  Phase-7 optimization-correctness checks), headless, device-free
+
+Previous milestone - Phase 6 (mobile gameplay polish):
 
 - Camera: built-in Camera2D position smoothing (configurable speed),
   per-axis map-bounds limits only when the map is viewport-sized or
