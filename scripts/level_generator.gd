@@ -1,13 +1,15 @@
 extends Node2D
 ## Shadow Protocol - procedural level construction from a text grid.
 ##
-## Grid values:
+## Grid values (central encoding defined in level_catalog.gd):
 ##   0 shadow floor  1 illuminated floor  2 solid wall
 ##   3 mission terminal  4 player spawn  5 enemy spawn  6 extraction point
+##   7 door (Door node, closed by default; not a wall - see door.gd)
 ##
 ## Walls are merged into horizontal runs (one StaticBody2D per run) to keep
-## the node count low. Returns a level descriptor consumed by Main and the
-## StealthSystem autoload.
+## the node count low. Doors become Door bodies whose collision and vision
+## behavior follow their open/closed state. Returns a level descriptor
+## consumed by Main and the StealthSystem autoload.
 
 const CELL_SIZE: float = 48.0
 
@@ -26,8 +28,9 @@ var grid_size: Vector2i = Vector2i.ZERO
 ##   spawn, terminals (Array), extraction, enemy_spawns (Array),
 ##   lit_cells (Dictionary of Vector2i), wall_cells (Dictionary of
 ##   Vector2i), bounds (Rect2), grid_size (Vector2i), cell_size (float),
-##   origin (Vector2)
-func generate(rows: Array) -> Dictionary:
+##   origin (Vector2), zones (Array, passed through), doors (Array of Door),
+##   door_cells (Dictionary of Vector2i)
+func generate(rows: Array, zones: Array = []) -> Dictionary:
 	for child in get_children():
 		child.queue_free()
 
@@ -54,6 +57,11 @@ func generate(rows: Array) -> Dictionary:
 	var wall_cells: Dictionary = {}
 	var terminals: Array[Vector2] = []
 	var enemy_spawns: Array[Vector2] = []
+	var doors: Array = []
+	var door_cells: Dictionary = {}
+	var doors_root := Node2D.new()
+	doors_root.name = "Doors"
+	add_child(doors_root)
 	var spawn: Vector2 = map_rect.size / 2.0
 	var extraction: Vector2 = spawn
 
@@ -71,6 +79,13 @@ func generate(rows: Array) -> Dictionary:
 					lit_cells[Vector2i(x, y)] = true
 				"2":
 					wall_cells[Vector2i(x, y)] = true
+				"7":
+					var door := Door.new()
+					door.cell = Vector2i(x, y)
+					door.position = _cell_center(x, y)
+					doors_root.add_child(door)
+					doors.append(door)
+					door_cells[Vector2i(x, y)] = true
 				"3":
 					terminals.append(_cell_center(x, y))
 					_draw_marker("Terminal", _cell_center(x, y), 10.0, COLOR_TERMINAL)
@@ -86,6 +101,9 @@ func generate(rows: Array) -> Dictionary:
 	return {
 		"spawn": spawn,
 		"wall_cells": wall_cells,
+		"zones": zones,
+		"doors": doors,
+		"door_cells": door_cells,
 		"terminals": terminals,
 		"extraction": extraction,
 		"enemy_spawns": enemy_spawns,

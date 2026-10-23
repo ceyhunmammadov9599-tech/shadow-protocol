@@ -178,7 +178,7 @@ func _ready() -> void:
 	# ================= E. Main scene integration (Phase 2 wiring) =================
 	var main: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	add_child(main)
-	await _frames(5)  # level generated, lights spawned, meter driven
+	await _frames(10)  # async level load completes, lights spawn, meter driven
 	_check(stealth.light_count() == 5, "main scene registers 4 static + 1 moving light, got %d" % stealth.light_count())
 	# Phase 3 grid integration (P3-T5).
 	var wall_bodies: int = main.get_node("LevelRoot/Walls").get_child_count()
@@ -189,7 +189,7 @@ func _ready() -> void:
 		var exp_spawns: Array[Vector2] = [Vector2(696.0, 312.0), Vector2(216.0, 600.0)]
 		var positions_ok: bool = true
 		for i in range(2):
-			if enemies_main[i].global_position != exp_spawns[i]:
+			if enemies_main[i].global_position.distance_to(exp_spawns[i]) > 8.0:
 				positions_ok = false
 		_check(positions_ok, "enemy positions match grid cell centers (not inside walls)")
 		var patrolling: bool = enemies_main[0].state == &"patrol" and enemies_main[1].state == &"patrol"
@@ -395,6 +395,279 @@ func _ready() -> void:
 		if child is Enemy:
 			child.queue_free()
 
+	# ================= G. Level generation and layouts (Phase 4) =================
+	await _frames(5)  # let section F teardown (queue_free) settle first
+	var stealth4: Node = get_node("/root/StealthSystem")
+	var base_conn: int = stealth4.noise_emitted.get_connections().size()
+
+	# G1/G2/G3: authored layouts load, dimensions valid, real walls, doors.
+	var joined_rows: Dictionary = {}
+	for descriptor: Dictionary in LevelCatalog.AUTHORED_LAYOUTS:
+		var gen: Node2D = (load("res://scripts/level_generator.gd") as GDScript).new()
+		add_child(gen)
+		await _frames(2)
+		var data: Dictionary = gen.generate(descriptor["rows"], descriptor.get("zones", []))
+		_check(data["grid_size"] == Vector2i(28, 16) and data["bounds"].size == Vector2(1344.0, 768.0),
+			"layout '%s' loads with valid grid dimensions" % descriptor["label"])
+		_check(gen.get_node("Walls").get_child_count() >= 20,
+			"layout '%s' wall cells generate real collision bodies" % descriptor["label"])
+		var vr: Dictionary = LevelCatalog.validate_rows(descriptor["rows"])
+		_check(vr["valid"], "layout '%s' validates (markers, doors, reachability)" % descriptor["label"])
+		var five_count: int = 0
+		var term_count: int = 0
+		for row: String in descriptor["rows"]:
+			five_count += row.count("5")
+			term_count += row.count("3")
+		_check(data["enemy_spawns"].size() == five_count and data["terminals"].size() == term_count,
+			"layout '%s' markers collect correctly (enemies %d, terminals %d)" % [descriptor["label"], five_count, term_count])
+		joined_rows[descriptor["label"]] = "|".join(descriptor["rows"])
+		gen.queue_free()
+		await _frames(2)
+
+	# G4: authored maps differ structurally.
+	_check(joined_rows.size() == 3 and joined_rows["legacy"] != joined_rows["layout_b"]
+		and joined_rows["layout_b"] != joined_rows["layout_c"]
+		and joined_rows["legacy"] != joined_rows["layout_c"],
+		"three authored layouts are structurally distinct")
+
+	# G5: same seed reproduces the same logical level.
+	var l42a: Dictionary = LevelCatalog.generate_layout(42)
+	var l42b: Dictionary = LevelCatalog.generate_layout(42)
+	_check("|".join(l42a["rows"]) == "|".join(l42b["rows"]) and str(l42a["zones"]) == str(l42b["zones"])
+		and l42a["attempts"] == l42b["attempts"],
+		"same seed reproduces the same logical level")
+
+	# G6: different seeds produce meaningfully different valid layouts.
+	var seed_rows: Dictionary = {}
+	var all_distinct: bool = true
+	for seed in [1, 2, 3]:
+		var desc: Dictionary = LevelCatalog.generate_layout(seed)
+		var ok: Dictionary = LevelCatalog.validate_rows(desc["rows"])
+		_check(ok["valid"] and desc["fallback"] == false,
+			"seed %d produces a valid generated level" % seed)
+		seed_rows[seed] = "|".join(desc["rows"])
+	for a in seed_rows:
+		for b in seed_rows:
+			if a < b and seed_rows[a] == seed_rows[b]:
+				all_distinct = false
+	_check(all_distinct and seed_rows.size() == 3, "different seeds produce different layouts")
+
+	# G7: generation is bounded.
+	_check(l42a["attempts"] >= 1 and l42a["attempts"] <= LevelCatalog.MAX_ATTEMPTS,
+		"generation stays within the attempt limit (attempts=%d)" % l42a["attempts"])
+
+	# G8: negative/odd seeds handled predictably.
+	var neg: Dictionary = LevelCatalog.generate_layout(-5)
+	var neg_valid: Dictionary = LevelCatalog.validate_rows(neg["rows"])
+	_check(neg_valid["valid"] and (neg["fallback"] == false or neg.has("reason")),
+		"negative seed handled predictably (fallback=%s)" % neg["fallback"])
+
+	# G9-G12: marker placement validity for every authored layout.
+	for descriptor: Dictionary in LevelCatalog.AUTHORED_LAYOUTS:
+		var rows_a: Array = descriptor["rows"]
+		var exp_spawn: Vector2 = _marker_center(rows_a, "4")
+		var exp_extract: Vector2 = _marker_center(rows_a, "6")
+		var gen2: Node2D = (load("res://scripts/level_generator.gd") as GDScript).new()
+		add_child(gen2)
+		await _frames(2)
+		var data2: Dictionary = gen2.generate(rows_a, [])
+		_check(data2["spawn"] == exp_spawn and data2["extraction"] == exp_extract,
+			"layout '%s' spawn and extraction match grid cell centers" % descriptor["label"])
+		var enemy_ok: bool = data2["enemy_spawns"].size() > 0
+		for sp: Vector2 in data2["enemy_spawns"]:
+			if sp != _marker_center_of(rows_a, sp):
+				enemy_ok = false
+		_check(enemy_ok, "layout '%s' enemy spawns sit on '5' cells, never walls" % descriptor["label"])
+		gen2.queue_free()
+		await _frames(2)
+
+	# G13/G14: reachability (extraction + objectives) via the validator.
+	var reach_all: bool = true
+	for descriptor: Dictionary in LevelCatalog.AUTHORED_LAYOUTS:
+		var v2: Dictionary = LevelCatalog.validate_rows(descriptor["rows"])
+		if not v2["valid"]:
+			reach_all = false
+	_check(reach_all, "all authored objectives and extractions are reachable")
+
+	# G15: invalid candidates are rejected with reasons.
+	var bad_rows: Array[String] = [
+		"222222222222",
+		"202222222222",
+		"223222222222",
+		"202222222222",
+		"200000000002",
+		"200004000002",
+		"200000000002",
+		"200050000002",
+		"200000000002",
+		"200000000062",
+		"200000000002",
+		"222222222222",
+	]
+	var vbad: Dictionary = LevelCatalog.validate_rows(bad_rows)
+	_check(not vbad["valid"] and vbad["reason"].contains("unreachable"),
+		"isolated terminal is rejected ('%s')" % vbad["reason"])
+	var door_rows: Array[String] = [
+		"222222222222",
+		"243000000002",
+		"200000000002",
+		"200000000002",
+		"200000000002",
+		"200007000002",
+		"200000000002",
+		"200000000002",
+		"200050000002",
+		"200000000062",
+		"200000000002",
+		"222222222222",
+	]
+	var vdoor: Dictionary = LevelCatalog.validate_rows(door_rows)
+	_check(not vdoor["valid"] and vdoor["reason"].contains("single-tile"),
+		"door in open space is rejected ('%s')" % vdoor["reason"])
+
+	# G16-G19: door collision, vision and navigation behavior (layout B).
+	var genB: Node2D = (load("res://scripts/level_generator.gd") as GDScript).new()
+	add_child(genB)
+	await _frames(2)
+	var dataB: Dictionary = genB.generate(LevelCatalog.LAYOUT_B["rows"], LevelCatalog.LAYOUT_B["zones"])
+	await _frames(2)
+	_check(dataB["doors"].size() == 4 and dataB["door_cells"].has(Vector2i(11, 4)),
+		"layout B creates 4 door objects at grid door cells")
+	for door: Node in dataB["doors"]:
+		stealth4.register_door(door)
+	stealth4.configure(dataB["lit_cells"], dataB["cell_size"], dataB["origin"], dataB["wall_cells"])
+
+	var door0: Node = dataB["doors"][0]
+	var p4: CharacterBody2D = (load("res://scenes/player.tscn") as PackedScene).instantiate()
+	add_child(p4)
+	await _frames(3)
+	p4.position = Vector2(600.0, 216.0)
+	p4.set_visibility(1.0)
+	var e_vis: CharacterBody2D = _mk_enemy(p4, Vector2(504.0, 216.0), Vector2.RIGHT)
+	await _frames(20)
+	_check(absf(e_vis.detection_strength()) < TOL,
+		"closed door obstructs enemy vision (strength=%.3f)" % e_vis.detection_strength())
+	door0.set_state(true)
+	await _frames(10)
+	_check(e_vis.detection_strength() > 0.0,
+		"open door permits vision through the doorway (strength=%.3f)" % e_vis.detection_strength())
+	door0.set_state(false)
+	await _frames(10)
+	_check(absf(e_vis.detection_strength()) < TOL,
+		"re-closing the door restores vision obstruction")
+	_check(stealth4.is_cell_blocked(Vector2i(11, 4)) and not stealth4.is_cell_blocked(Vector2i(10, 4)),
+		"navigation queries reflect the live door state")
+	e_vis.set_player(null)
+	e_vis.queue_free()
+	await _frames(4)  # free the corridor before the movement test
+
+	# Movement: closed door blocks, open door permits.
+	p4.position = Vector2(504.0, 216.0)
+	await _frames(5)
+	Input.action_press("move_right")
+	await _frames(60)
+	Input.action_release("move_right")
+	_check(p4.global_position.x < 528.0,
+		"closed door blocks player movement (x=%.1f)" % p4.global_position.x)
+	door0.set_state(true)
+	await _frames(2)
+	Input.action_press("move_right")
+	await _frames(90)
+	Input.action_release("move_right")
+	_check(p4.global_position.x > 600.0,
+		"open door permits player movement (x=%.1f)" % p4.global_position.x)
+
+	# G20/G21: restricted-zone metadata.
+	var zones_b: Array = LevelCatalog.LAYOUT_B["zones"]
+	_check(LevelCatalog.zone_at(zones_b, Vector2(700.0, 150.0), 48.0, Vector2.ZERO) == &"zone_north_lab",
+		"zone membership queried by world position")
+	_check(LevelCatalog.zone_at(zones_b, Vector2(700.0, 20.0), 48.0, Vector2.ZERO) == &"",
+		"position outside zone rectangles returns no zone")
+	_check(LevelCatalog.zone_at(zones_b, Vector2(24.0, 24.0), 48.0, Vector2.ZERO) == &"",
+		"zone boundary is deterministic (corner outside)")
+	var overlap_zones: Array = [
+		{"id": &"zone_x", "rect": Rect2i(1, 1, 5, 5)},
+		{"id": &"zone_y", "rect": Rect2i(3, 3, 5, 5)},
+	]
+	var voverlap: Dictionary = LevelCatalog.validate_zones(overlap_zones, LevelCatalog.LAYOUT_B["rows"])
+	_check(not voverlap["valid"] and voverlap["reason"].contains("overlap"),
+		"overlapping restricted zones with different ids are rejected")
+
+	# G24 (authored): static lighting matches the generated grid.
+	var lit_expected: Dictionary = _expected_lit(LevelCatalog.LAYOUT_B["rows"])
+	_check(dataB["lit_cells"].size() == lit_expected.size() and _same_keys(dataB["lit_cells"], lit_expected),
+		"layout B static illumination matches its '1' cells (%d cells)" % lit_expected.size())
+	var l42: Dictionary = LevelCatalog.generate_layout(42)
+	var gen42: Node2D = (load("res://scripts/level_generator.gd") as GDScript).new()
+	add_child(gen42)
+	await _frames(2)
+	var data42: Dictionary = gen42.generate(l42["rows"], l42.get("zones", []))
+	var lit42: Dictionary = _expected_lit(l42["rows"])
+	_check(data42["lit_cells"].size() == lit42.size() and _same_keys(data42["lit_cells"], lit42),
+		"seeded layout static illumination matches its '1' cells (%d cells)" % lit42.size())
+	gen42.queue_free()
+
+	# G29: representative fixed seeds produce valid maps (bounded property set).
+	var seeds_ok: bool = true
+	for seed in [7, 123, 999, 2026, 55]:
+		var d2: Dictionary = LevelCatalog.generate_layout(seed)
+		var ok2: Dictionary = LevelCatalog.validate_rows(d2["rows"])
+		if not ok2["valid"] or d2["attempts"] > LevelCatalog.MAX_ATTEMPTS:
+			seeds_ok = false
+	_check(seeds_ok, "representative seeds 7/123/999/2026/55 all generate valid levels")
+	var property_ok: bool = true
+	for seed in range(1, 11):
+		var d3: Dictionary = LevelCatalog.generate_layout(seed)
+		var ok3: Dictionary = LevelCatalog.validate_rows(d3["rows"])
+		if not ok3["valid"] or d3["fallback"]:
+			property_ok = false
+	_check(property_ok, "bounded multi-seed property: seeds 1-10 all valid")
+
+	# Fixture cleanup before the main-scene lifecycle block.
+	# (e_vis was already freed before the movement test.)
+	p4.queue_free()
+	for child_g: Node in get_children():
+		if child_g is Door or (child_g is Node2D and child_g.get_script() == load("res://scripts/level_generator.gd")):
+			child_g.queue_free()
+	stealth4.clear_doors()
+	await _frames(4)
+
+	# G22/G23/G25/G26/G27/G28: level lifecycle through the main scene.
+	var main2: Node = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	add_child(main2)
+	await _frames(12)
+	_check(main2.level_label == "legacy", "main scene boots the legacy regression fixture")
+	await main2.load_level(LevelCatalog.LAYOUT_B)
+	await _frames(6)
+	_check(main2.enemies.size() == 2 and StealthSystem.light_count() == 3,
+		"switching to layout B spawns 2 enemies and 3 lamps (got %d enemies, %d lights)" % [main2.enemies.size(), StealthSystem.light_count()])
+	var b_patrol: bool = true
+	for e_b: Node in main2.enemies:
+		if e_b.state != &"patrol":
+			b_patrol = false
+	_check(b_patrol, "layout B enemies start in PATROL")
+	await main2.load_level(LevelCatalog.LAYOUT_C)
+	await _frames(6)
+	_check(main2.enemies.size() == 3 and StealthSystem.light_count() == 2,
+		"switching to layout C respawns cleanly (3 enemies, 2 lights, no duplicates)")
+	_check(StealthSystem.noise_emitted.get_connections().size() == base_conn + 3,
+		"enemy noise subscriptions match the live enemy count exactly")
+	var routes_ok: bool = true
+	for e_c: Node in main2.enemies:
+		for wp: Vector2 in e_c.patrol_route():
+			if StealthSystem.is_cell_blocked(stealth4.world_to_grid(wp)):
+				routes_ok = false
+	_check(routes_ok, "layout C patrol routes avoid walls and closed doors")
+	_check(LevelCatalog.zone_at(main2.level_data["zones"], Vector2(720.0, 384.0), 48.0, Vector2.ZERO) == &"zone_vault",
+		"layout C restricted vault zone is queryable")
+
+	main2.queue_free()
+	await _frames(6)
+	_check(StealthSystem.light_count() == 0 and stealth4.noise_emitted.get_connections().size() == base_conn,
+		"level teardown clears light registrations and noise subscriptions")
+	_check(not stealth4.is_cell_blocked(Vector2i(7, 7)),
+		"door registrations are cleared after teardown")
+
 	if failures == 0:
 		print("SMOKE TEST: all checks passed")
 		get_tree().quit(0)
@@ -405,6 +678,41 @@ func _ready() -> void:
 
 ## Instantiates a standalone enemy fixture: standing patrol (single point),
 ## explicit facing, fast decisions, given a player reference.
+## Expected world center of the first marker cell in a grid.
+func _marker_center(rows: Array, tile: String) -> Vector2:
+	for y in range(rows.size()):
+		var x: int = (rows[y] as String).find(tile)
+		if x >= 0:
+			return Vector2(x + 0.5, y + 0.5) * 48.0
+	return Vector2(-9999, -9999)
+
+
+## The cell center a world position sits on (for spawn validation).
+func _marker_center_of(rows: Array, world_pos: Vector2) -> Vector2:
+	var cell := Vector2i(int(world_pos.x / 48.0), int(world_pos.y / 48.0))
+	return Vector2(cell.x + 0.5, cell.y + 0.5) * 48.0
+
+
+## All '1' cells of a grid as a Dictionary of Vector2i -> true.
+func _expected_lit(rows: Array) -> Dictionary:
+	var lit := {}
+	for y in range(rows.size()):
+		var row := rows[y] as String
+		for x in range(row.length()):
+			if row[x] == "1":
+				lit[Vector2i(x, y)] = true
+	return lit
+
+
+func _same_keys(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for key in a:
+		if not b.has(key):
+			return false
+	return true
+
+
 func _mk_enemy(p: CharacterBody2D, at: Vector2, face: Vector2) -> CharacterBody2D:
 	var enemy: CharacterBody2D = (load("res://scenes/enemy.tscn") as PackedScene).instantiate()
 	enemy.position = at

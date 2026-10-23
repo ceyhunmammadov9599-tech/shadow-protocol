@@ -140,6 +140,10 @@ func current_target() -> Vector2:
 	return _target
 
 
+func patrol_route() -> Array[Vector2]:
+	return _patrol_route.duplicate()
+
+
 func last_known_position() -> Vector2:
 	return last_known_player_position
 

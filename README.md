@@ -9,6 +9,23 @@ shadow, avoid patrols, complete objectives and extract undetected.
 
 ## Status
 
+Phase 4 (procedural level generation) - complete at headless-verification
+level:
+
+- LevelCatalog: central tile encoding (0 floor, 1 lit, 2 wall, 3 terminal,
+  4 spawn, 5 enemy, 6 extraction, 7 door) and three distinct authored
+  layouts (legacy regression fixture, layout B, layout C)
+- Doors with real collision: closed doors block movement and enemy vision
+  raycasts, open doors permit both; deterministic state transitions;
+  navigation queries update live with door state
+- Restricted zones: stable ids + deterministic rects, queryable by world
+  position; overlapping definitions rejected
+- Seeded procedural generation (rooms + corridors + doors + zones + lamps):
+  same seed reproduces the same level, bounded attempts with rejection
+  reasons and a validated fallback, BFS reachability validation
+- Main scene loads any level descriptor with full lifecycle cleanup
+  (no duplicate enemies, leaked lights, stale doors or subscriptions)
+
 Phase 3 (enemy artificial intelligence) - complete at headless-verification
 level:
 

@@ -26,6 +26,11 @@ const NOISE_RADIUS_SPRINT: float = 320.0
 var lit_cells: Dictionary = {}  # Vector2i(grid_x, grid_y) -> true
 var cell_size: float = 48.0
 var grid_origin: Vector2 = Vector2.ZERO
+## Static wall cells (Phase 4): grid cells that are always impassable.
+var wall_cells: Dictionary = {}
+## Registered doors: navigation queries reflect their live open/closed
+## state; vision/movement use their physical collision directly.
+var _doors: Array = []
 
 ## Registered dynamic light sources (LightSource and subclasses).
 var _lights: Array[Node] = []
@@ -33,11 +38,41 @@ var _lights: Array[Node] = []
 var _last_noise_frame: Dictionary = {}
 
 
-## Called by Main once the level has been generated.
-func configure(lit: Dictionary, size: float, origin: Vector2) -> void:
+## Called by Main once the level has been generated. The optional walls
+## dictionary enables is_cell_blocked() navigation queries (Phase 4).
+func configure(lit: Dictionary, size: float, origin: Vector2, walls: Dictionary = {}) -> void:
 	lit_cells = lit
 	cell_size = maxf(size, 1.0)
 	grid_origin = origin
+	wall_cells = walls
+
+
+# ------------------------------------------------------------ navigation --
+
+## Registers a door so is_cell_blocked() reflects its live state.
+func register_door(door: Node) -> void:
+	if not _doors.has(door):
+		_doors.append(door)
+
+
+func unregister_door(door: Node) -> void:
+	_doors.erase(door)
+
+
+## Disconnects every registered door (level teardown).
+func clear_doors() -> void:
+	_doors.clear()
+
+
+## True when the grid cell blocks navigation: a static wall, or a door
+## in the closed state. Updates live with door state changes.
+func is_cell_blocked(cell: Vector2i) -> bool:
+	if wall_cells.has(cell):
+		return true
+	for door: Node in _doors:
+		if door.cell == cell and not door.is_open:
+			return true
+	return false
 
 
 # ---------------------------------------------------------------- lights --
