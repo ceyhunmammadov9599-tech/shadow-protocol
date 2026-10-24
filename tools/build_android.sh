@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Shadow Protocol - command-line Android APK export.
-# Debug signing by default. Release signing only through the
-# SHADOW_PROTOCOL_KEYSTORE / SHADOW_PROTOCOL_KEYSTORE_USER / SHADOW_PROTOCOL_KEYSTORE_PASSWORD
-# environment variables - secrets are never stored in the repository,
-# never echoed, and never passed through process arguments.
+# Debug signing by default. Release signing ONLY through environment
+# variables (SHADOW_PROTOCOL_KEYSTORE / _USER / _PASSWORD), which are
+# mapped to Godot's supported GODOT_ANDROID_KEYSTORE_RELEASE_* overrides
+# for the export child process. export_presets.cfg is never modified:
+# no signing secret is ever written into any project file.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,29 +39,26 @@ if [ -n "${SHADOW_PROTOCOL_KEYSTORE:-}" ]; then
   [ -n "${SHADOW_PROTOCOL_KEYSTORE_PASSWORD+x}" ] || fail "SHADOW_PROTOCOL_KEYSTORE_PASSWORD is not set."
   APKSIGNER="$(ls -d "$SDK_ROOT"/build-tools/*/apksigner 2>/dev/null | head -n1)"
   [ -n "$APKSIGNER" ] || fail "apksigner not found under $SDK_ROOT - cannot verify a release build."
-  # Credentials reach sed through stdin, never through process
-  # arguments; export_presets.cfg is restored from .bak on exit.
-  sed -i.bak -f - "$PRESET_CFG" <<SED_CMDS
-s|^keystore/release=.*|keystore/release="$SHADOW_PROTOCOL_KEYSTORE"|
-s|^keystore/release_user=.*|keystore/release_user="${SHADOW_PROTOCOL_KEYSTORE_USER:-}"|
-s|^keystore/release_password=.*|keystore/release_password="${SHADOW_PROTOCOL_KEYSTORE_PASSWORD:-}"|
-SED_CMDS
   OUT="$ROOT/build/ShadowProtocol-v${VERSION_NAME}-release.apk"
   EXPORT_MODE="--export-release"
-  trap 'mv "$PRESET_CFG.bak" "$PRESET_CFG"' EXIT
 fi
 
 mkdir -p "$ROOT/build"
 
 echo "Exporting APK (preset: $PRESET, mode: ${EXPORT_MODE#--})..."
 # Bounded execution: 15-minute cap on the export per the phase protocol.
-timeout 900 "$GODOT_BIN" --headless --path "$ROOT" "$EXPORT_MODE" "$PRESET" "$OUT" || fail "Export failed."
+# Godot reads signing from its documented environment overrides; the
+# secret lives only in this process environment and the child's.
+timeout 900 env \
+  GODOT_ANDROID_KEYSTORE_RELEASE_PATH="${SHADOW_PROTOCOL_KEYSTORE:-}" \
+  GODOT_ANDROID_KEYSTORE_RELEASE_USER="${SHADOW_PROTOCOL_KEYSTORE_USER:-}" \
+  GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${SHADOW_PROTOCOL_KEYSTORE_PASSWORD:-}" \
+  "$GODOT_BIN" --headless --path "$ROOT" "$EXPORT_MODE" "$PRESET" "$OUT" || fail "Export failed."
 
 [ -s "$OUT" ] || fail "Export produced no APK."
 echo "OK: $OUT ($(du -h "$OUT" | cut -f1))"
 
-# Release builds are signature-verified here and there; a release
-# artifact that fails verification is a failed build.
+# A release artifact that fails signature verification is a failed build.
 if [ -n "${SHADOW_PROTOCOL_KEYSTORE:-}" ]; then
   "$APKSIGNER" verify --print-certs "$OUT" >/dev/null || fail "apksigner rejected the release APK signature."
   echo "OK: release APK signature verified by apksigner."
