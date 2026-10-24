@@ -220,3 +220,39 @@ project.godot to force them visible on desktop for layout testing.
 - Enemy AI, procedural level variety and mission logic are intentionally
   out of scope until Phases 3-5; the interfaces (noise_emitted,
   visibility, enemy spawn points, terminals) are already in place.
+
+## Reproducible development environment
+
+Clone and continue development on any computer:
+
+1. Clone: `git clone https://github.com/ceyhunmammadov9599-tech/shadow-protocol.git`
+2. Requirements: Godot 4.7.2 (stable), JDK 17+, Android SDK with
+   build-tools 34+ (aapt2, apksigner), Linux/Bash.
+3. Open/import: `godot --headless --path . --import` (regenerates the
+   .godot cache; it is not committed).
+4. Run the game: open the project in the Godot editor and press F5, or
+   `godot --path .` from the project root.
+5. Smoke tests: `godot --headless --path . res://tools/smoke_test.tscn`
+   (expects "SMOKE TEST: all checks passed", 297 checks).
+6. Full validation: `bash tools/validate_project.sh` (import + boot +
+   smoke + Android build host checks; needs GODOT_BIN and
+   ANDROID_SDK_ROOT set if not on PATH).
+7. Debug APK: `bash tools/build_android.sh` (expects Godot 4.7.2 and
+   Android build-tools; produces build/ShadowProtocol-v0.1.0-debug.apk).
+8. Release signing: the signing keystore is deliberately NOT in this
+   repository. Restore it from your separate private backup (created
+   via tools/generate_release_keystore.sh), then run
+   `bash tools/build_release_local.sh`, which prompts for the password
+   and passes it only through the Godot child-process environment
+   (GODOT_ANDROID_KEYSTORE_RELEASE_*). Never place passwords in
+   export_presets.cfg or any committed file.
+9. Verify a release APK: `apksigner verify --print-certs <apk>` and
+   compare the SHA-256 fingerprint with your keystore certificate.
+   Never replace an existing keystore silently (published-app
+   updates would become uninstallable).
+10. Continue development: add features, run the smoke suite, and
+    update roadmap.md evidence as tasks complete. Roadmap items that
+    remain OPEN: P7-T2 (60 FPS on mid-range hardware), P8-T1 (device
+    installation), P8-T3 (on-device gameplay verification). These
+    require a physical Android device and are therefore not claimed
+    complete by any host-side test.
