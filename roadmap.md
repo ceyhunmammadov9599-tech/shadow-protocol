@@ -448,7 +448,7 @@ evidence only).
   under thermal load, repeated comparable runs, input responsiveness
   while active. No headless result may mark this complete.
 
-## Phase 8 — APK Packaging and Device Testing (PARTIALLY COMPLETE — host portion of P8-T1 and debug signing of P8-T2 verified; install, release signing and device criteria OPEN)
+## Phase 8 — APK Packaging and Device Testing (PARTIALLY COMPLETE — host portion of P8-T1 and debug+release signing of P8-T2 verified; install and device criteria OPEN)
 
 - [ ] P8-T1 Execute tools/setup_android.sh -> build_android.sh ->
       install_android.sh end to end.
@@ -459,15 +459,28 @@ evidence only).
       a physical device; out of scope by design for device-free
       pipelines). Remains open as written until an on-device install
       is performed.
-- [ ] P8-T2 Debug and release signing verification.
-      PARTIAL: debug signing VERIFIED (apksigner verify: v2 true,
-      v3 true, signer CN=Android Debug, SHA-256
+- [x] P8-T2 Debug and release signing verification.
+      Debug signing verified earlier (apksigner verify: v2 true, v3
+      true, signer CN=Android Debug, SHA-256
       38be10fad45c9dce9a12929324ce5bb7c586ba523cbdd2107e0f7c22beee1676).
-      Release signing NOT VERIFIED: no release keystore exists in this
-      environment; the workflow is implemented (build_android.sh reads
-      SHADOW_PROTOCOL_KEYSTORE / _USER / _PASSWORD env vars, never
-      storing secrets in the repo) and awaits user-supplied release
-      credentials.
+      Release signing verified 2026-10-24 (approved automated flow):
+      a PKCS12 keystore with RSA-3072 key (alias shadow_protocol_upload,
+      10000-day validity) was generated with CSPRNG credentials (never
+      in argv, Git or project files) and used to build
+      ShadowProtocol-v0.1.0-release.apk via environment-variable signing
+      overrides; apksigner verify exit 0, schemes v2+v3 true, signer
+      CN=Shadow Protocol Upload Key, SHA-256
+      74ec3b4ec475f65517f0676b30d801f9fc557a5bb733dcabd70a5f016c574a0b
+      (differs from the debug certificate). The private key never
+      entered Git or any public file; the owner-only encrypted backup
+      (AES-256-GCM + scrypt) was published and end-to-end verified
+      (download, SHA-256, decrypt, keystore revalidation), and its
+      recovery password was sent to the developer's verified private
+      Telegram chat (approved Option 1). OWNER RETRIEVAL: NOT YET
+      CONFIRMED — technical acceptance complete; awaiting the owner's
+      confirmation that the archive and password were received and
+      stored. Regression evidence same day: smoke 297/297,
+      validate_project.sh exit 0 (21 host checks).
 - [ ] P8-T3 On-device gameplay verification (REQUIRES a physical device;
       cannot be completed under the current device-free protocol — remains
       an open acceptance criterion, not verified).
@@ -512,12 +525,14 @@ evidence only).
   code-verified, P7-T2 device-unverified); Phase 8 partially complete
   at host level (setup+build+debug-signing verified; install step,
   release signing and device criteria open).
-- Tasks complete: 26 / 30 (4 remaining: P7-T2, P8-T1, P8-T2, P8-T3;
-  P8-T1 and P8-T2 are now host-level partials pending device/release
-  material).
+- Tasks complete: 27 / 30 (3 remaining: P7-T2, P8-T1, P8-T3; P8-T1
+  remains a host-level partial pending the device install; P8-T2's
+  technical acceptance is complete, owner backup retrieval NOT YET
+  CONFIRMED).
 - Unverified items: on-device/touchscreen behavior of all phases (protocol
   restriction), P7-T2 Android 60 FPS device criteria, Phase 8 device
-  criteria (install + gameplay), Phase 8 release signing.
+  criteria (install + gameplay). Owner retrieval of the signing backup
+  is delivered but not yet confirmed by the owner.
 - Visual Quality Upgrade Iteration (2026-10-23): COMPLETE at code level;
   42 new presentation checks added, smoke total now 283/283. Not a
   numbered phase task - no change to the 26/30 task count.
@@ -889,3 +904,34 @@ and public storage remain excluded for signing secrets per the phase
 protocol. Key generation stays withheld until a verified owner-only
 channel exists; the one-time owner decision that unblocks it is
 documented in the accompanying report. Roadmap remains 26/30.
+
+## Phase 8 P8-T2 Release Signing Completion Note (2026-10-24)
+
+The developer approved Option 1 (encrypted public backup + Telegram
+password delivery). Execution: Telegram channel preflight (platform
+bot integration verified; the environment's raw Bot API token is
+invalid - HTTP 401 twice - and was not used; direct delivery goes
+through the agent's connected Telegram bot to the developer's
+verified private chat). Public-delivery preflight passed with a
+harmless AES-256-GCM/scrypt sample (upload/download SHA-256 match,
+wrong-password and tamper cases both rejected). A PKCS12 keystore
+(RSA-3072, alias shadow_protocol_upload, 10000-day validity,
+certificate SHA-256
+74ec3b4ec475f65517f0676b30d801f9fc557a5bb733dcabd70a5f016c574a0b)
+was generated with CSPRNG passwords outside the repository
+(restrictive permissions, no secrets in argv/Git/files/logs).
+The recovery package (keystore + credential record + restore
+instructions + SHA-256 manifest + public certificate) was encrypted
+as an SPBK1 container (AES-256-GCM, scrypt n=2^15 r=8 p=1, random
+salt, unique nonce, independent 256-bit archive password), published
+through the normal HTTPS route, and verified end-to-end (remote
+download, SHA-256 ff29bc5d..., decrypt, keystore revalidation with
+its own password, wrong-password/tamper rejection). The release APK
+was built through the environment-variable signing flow and verified
+(apksigner exit 0, v2+v3 true, fingerprint identical to the generated
+key, distinct from the debug certificate). Final-tree regression:
+smoke 297/297, validate_project.sh exit 0 (21 host checks). Roadmap
+27/30. Owner retrieval of the encrypted backup and password:
+DELIVERED / NOT YET CONFIRMED. Telegram delivery is an ordinary
+cloud message (not E2EE Secret Chat); the encrypted archive is
+publicly reachable but only the archive password holder can decrypt.
