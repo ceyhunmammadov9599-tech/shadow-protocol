@@ -35,4 +35,11 @@ echo "[4/4] Running headless smoke test (movement, crouch, joystick, stealth)...
 grep -q "SMOKE TEST: all checks passed" "$LOG" || {
   tail -n 40 "$LOG"; echo "ERROR: smoke test did not pass."; exit 1; }
 
+# Host-only Android build-script checks (P8-T2 naming/signing logic).
+if [ -x "$ROOT/tools/test_build_android_host.sh" ]; then
+  echo "[5/5] Running Android build host checks..."
+  bash "$ROOT/tools/test_build_android_host.sh" || {
+    echo "ERROR: Android build host checks failed."; exit 1; }
+fi
+
 echo "OK: project validated headless (import + $FRAMES frames + smoke test, no errors)."
