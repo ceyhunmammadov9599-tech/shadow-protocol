@@ -1,11 +1,15 @@
 # Shadow Protocol — Internal Roadmap
 
-Development tracking document. Lives in the project root per the internal
-automation protocol but is NOT committed to the repository (the external
-delivered roadmap is the user-facing copy). Verify, do not assume.
+Development tracking document. Lives in the project root. Since the
+2026-10-24 complete-backup directive it IS committed to the repository
+(commits 57855a1/fd9d331; supersedes the earlier not-committed rule).
+Verify, do not assume.
 
-Current focus: Phase 7 — Android Optimization (P7-T1 complete at code
-level; P7-T2 awaits real-device evidence).
+Current focus: Phase 8 — Release Signing & Delivery (P8-T1/P8-T2/P8-T3
+open; P7-T1 complete at code level, P7-T2 awaits real-device evidence).
+(Corrected 2026-10-24: the previous intro metadata still said "Phase 7"
+and "not committed" after the Phase 8 backup work — demonstrably stale
+statements, historical evidence below is preserved unchanged.)
 
 Legend: [x] complete with recorded evidence · [ ] open
 
@@ -857,3 +861,31 @@ tracked (70 files; assets/ is empty placeholders - the game is fully
 procedural), history scanned clean of secrets, and a fresh-clone
 reproducibility test (clone + import + smoke) was executed
 successfully. P8-T2, P7-T2, P8-T1, P8-T3 remain OPEN (26/30).
+
+## Phase 8 Private-Delivery Diagnostic Note (2026-10-24)
+
+P8-T2 remains OPEN; no keystore, password or release APK was created,
+per the phase protocol's stop rule. The blocked signed-URL delivery was
+diagnosed with non-secret evidence: the generated download tokens carry
+an issuer/subject application identity (urn:app:588d9e23...) that does
+not match the object-owning application in the file path
+(6a23f0e31a5238e6a0f12e8b), audience urn:service:file.download, 900s
+validity - the media service rejects the cross-application token with
+HTTP 401 "token validation failed" from every client tested. This is a
+platform-side token-configuration defect; authentication was not, and
+must not be, disabled.
+
+Alternative owner-only delivery mechanisms actually inspected and ruled
+out this run: authenticated API file routes (private objects return
+404 file_not_found even with a valid service token; public objects do
+serve), all OAuth connectors (none authorized), recipient public-key
+E2E delivery (no GPG/SSH keys published on the developer's GitHub
+account), agent secret storage (owner-viewable editor Secrets tab
+exists, but this agent has no set_secrets capability), agent API docs
+endpoints (app not found without the editor-provided base), and
+backend-function retrieval (no owner-accessible authenticated
+invocation surface verifiable from this environment). Telegram, GitHub
+and public storage remain excluded for signing secrets per the phase
+protocol. Key generation stays withheld until a verified owner-only
+channel exists; the one-time owner decision that unblocks it is
+documented in the accompanying report. Roadmap remains 26/30.
