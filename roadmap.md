@@ -932,6 +932,48 @@ was built through the environment-variable signing flow and verified
 key, distinct from the debug certificate). Final-tree regression:
 smoke 297/297, validate_project.sh exit 0 (21 host checks). Roadmap
 27/30. Owner retrieval of the encrypted backup and password:
-DELIVERED / NOT YET CONFIRMED. Telegram delivery is an ordinary
-cloud message (not E2EE Secret Chat); the encrypted archive is
-publicly reachable but only the archive password holder can decrypt.
+DELIVERED AND CONFIRMED (2026-10-24, developer message with Windows 11
+PowerShell evidence): downloaded shadow-protocol-signing-backup-v1.spbk,
+verified SPBK1 container parameters (scrypt n=32768 r=8 p=1,
+AES-256-GCM), decrypted with the separately received recovery password
+(7975 bytes recovered), ciphertext SHA-256 matched
+ff29bc5dbbd564ca288d773c1fa5dbe555baae8f14270bd8d85094ee71792638,
+expected member listing confirmed (keystore, public certificates,
+fingerprint file, credential record, restore instructions, manifest),
+and the temporary decrypted file was removed after inspection. Limits:
+this does NOT establish a separate offsite backup, an independent
+Windows keytool verification of the inner private-key entry, or any
+Android runtime behavior. Telegram delivery was an ordinary cloud
+message (not E2EE Secret Chat); the encrypted archive is publicly
+reachable but only the archive password holder can decrypt. No secret
+values appear in this record.
+## Phase 7/8 Device Handoff Note (2026-10-24, host-side preparation)
+
+P7-T2, P8-T1 and P8-T3 remain OPEN and DEVICE-UNVERIFIED; this
+iteration completed every practical device-free preparation for them.
+
+- docs/ANDROID_DEVICE_ACCEPTANCE.md added: P7-T2 60 FPS test plan over
+  the nine verified benchmark scenarios (A_legacy_steady through
+  I_door_active, IDs checked against tools/benchmark.gd), P8-T1 install
+  checklist with the debug-certificate upgrade-incompatibility warning,
+  and the P8-T3 gameplay matrix (18 implemented mechanics plus two
+  documented NOT-IMPLEMENTED items: main menu and pause/persistence).
+- tools/verify_release_apk_host.sh added: standalone host-only release
+  APK verifier (ZIP integrity, package/version metadata, v2+v3
+  signature, release fingerprint match, debug-certificate rejection,
+  argument validation; no secrets, no absolute paths, no ADB).
+  Result on build/ShadowProtocol-v0.1.0-release.apk: 5 PASS / 0 FAIL;
+  correctly rejects the debug-signed APK.
+- Host regression checks 21 -> 26 (verifier syntax, path portability,
+  release acceptance, debug rejection, argument validation), all
+  passing; smoke 297/297; import/boot/validate exit 0;
+  setup_android.sh --preflight exit 0 with all six prerequisites
+  (java/godot on PATH).
+- Fresh release artifact audit (2026-10-24): ZIP 153 entries clean,
+  package com.shadowprotocol.game 0.1.0/1 arm64-v8a, release certificate
+  74ec3b4ec475f65517f0676b30d801f9fc557a5bb733dcabd70a5f016c574a0b,
+  debug certificate absent, APK SHA-256
+  fc40011c4182e2b0ce8e1359993f9a5ed763dd7d7929885303f5c5a056329a3b.
+
+Counts remain 27/30. P7-T2, P8-T1 and P8-T3 can only close with real
+device evidence collected per the handoff document.

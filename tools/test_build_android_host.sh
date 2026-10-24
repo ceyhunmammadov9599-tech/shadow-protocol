@@ -75,5 +75,23 @@ grep -qi 'android debug' "$VER" \
   && ok "keystore verifier rejects the debug certificate" \
   || bad "debug-certificate rejection missing in verifier"
 
+# --- verify_release_apk_host.sh (reusable APK verification) ---
+VER="$ROOT/tools/verify_release_apk_host.sh"
+if [ -f "$VER" ]; then
+  bash -n "$VER" 2>/dev/null && ok "verify_release_apk_host.sh passes bash -n syntax validation" || bad "verify_release_apk_host.sh syntax"
+  grep -q "ANDROID_SDK_ROOT" "$VER" && ok "APK verifier uses ANDROID_SDK_ROOT (no absolute paths)" || bad "APK verifier uses an absolute path"
+  REL="$ROOT/build/ShadowProtocol-v0.1.0-release.apk"
+  DBG="$ROOT/build/ShadowProtocol-v0.1.0-debug.apk"
+  if [ -f "$REL" ]; then
+    if bash "$VER" "$REL" >/dev/null 2>&1; then ok "APK verifier accepts the release artifact"; else bad "APK verifier rejects a valid release APK"; fi
+    if [ -f "$DBG" ]; then
+      if bash "$VER" "$DBG" >/dev/null 2>&1; then bad "APK verifier accepted a debug-signed APK"; else ok "APK verifier rejects the debug-signed APK"; fi
+    fi
+  else
+    echo "  NOTE: release APK absent; skipping artifact-dependent verifier checks"
+  fi
+  if bash "$VER" >/dev/null 2>&1; then bad "APK verifier accepts missing arguments"; else ok "APK verifier validates argument count"; fi
+fi
+
 echo "Android build/signing host checks: $pass PASS / $failp FAIL"
 [ "$failp" -eq 0 ]
