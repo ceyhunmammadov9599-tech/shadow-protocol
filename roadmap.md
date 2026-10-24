@@ -5,8 +5,10 @@ Development tracking document. Lives in the project root. Since the
 (commits 57855a1/fd9d331; supersedes the earlier not-committed rule).
 Verify, do not assume.
 
-Current focus: Phase 8 — Release Signing & Delivery (P8-T1/P8-T2/P8-T3
-open; P7-T1 complete at code level, P7-T2 awaits real-device evidence).
+Current focus: Phase 8 — Release Handoff (P8-T2 COMPLETE; P8-T1 OPEN,
+device installation required; P8-T3 OPEN, on-device gameplay required;
+P7-T2 OPEN, real-device performance evidence required; P7-T1 complete
+at code level).
 (Corrected 2026-10-24: the previous intro metadata still said "Phase 7"
 and "not committed" after the Phase 8 backup work — demonstrably stale
 statements, historical evidence below is preserved unchanged.)
@@ -476,10 +478,11 @@ evidence only).
       (AES-256-GCM + scrypt) was published and end-to-end verified
       (download, SHA-256, decrypt, keystore revalidation), and its
       recovery password was sent to the developer's verified private
-      Telegram chat (approved Option 1). OWNER RETRIEVAL: NOT YET
-      CONFIRMED — technical acceptance complete; awaiting the owner's
-      confirmation that the archive and password were received and
-      stored. Regression evidence same day: smoke 297/297,
+      Telegram chat (approved Option 1). Owner recovery CONFIRMED on
+      2026-10-24 through developer-provided Windows 11 evidence; see
+      the dated Phase 8 recovery confirmation note. (Historical record:
+      receipt was still pending — NOT YET CONFIRMED — at the close of
+      the original signing run.) Regression evidence same day: smoke 297/297,
       validate_project.sh exit 0 (21 host checks).
 - [ ] P8-T3 On-device gameplay verification (REQUIRES a physical device;
       cannot be completed under the current device-free protocol — remains
@@ -526,13 +529,16 @@ evidence only).
   at host level (setup+build+debug-signing verified; install step,
   release signing and device criteria open).
 - Tasks complete: 27 / 30 (3 remaining: P7-T2, P8-T1, P8-T3; P8-T1
-  remains a host-level partial pending the device install; P8-T2's
-  technical acceptance is complete, owner backup retrieval NOT YET
-  CONFIRMED).
+  remains a host-level partial pending the device install; P8-T2 is
+  complete and its owner backup retrieval is CONFIRMED, see the dated
+  Phase 8 recovery confirmation note).
 - Unverified items: on-device/touchscreen behavior of all phases (protocol
   restriction), P7-T2 Android 60 FPS device criteria, Phase 8 device
-  criteria (install + gameplay). Owner retrieval of the signing backup
-  is delivered but not yet confirmed by the owner.
+  criteria (install + gameplay). Owner retrieval of the signing backup:
+  CONFIRMED on 2026-10-24 (Windows 11 recovery evidence). Limits remain:
+  no independently verified second offsite backup, no Windows keytool
+  private-key revalidation demonstrated, no Android device runtime
+  verification.
 - Visual Quality Upgrade Iteration (2026-10-23): COMPLETE at code level;
   42 new presentation checks added, smoke total now 283/283. Not a
   numbered phase task - no change to the 26/30 task count.
